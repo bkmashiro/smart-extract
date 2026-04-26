@@ -1,0 +1,21 @@
+sevenzip_path: ""  # auto-detected if empty (checks Program Files, then PATH)
+
+people:
+  alice:
+    patterns: ["alice_\\d+", "ALI"]   # regexes matched against filename (without extension)
+    match_mode: pattern               # "pattern" or "always_try"
+    priority: 0
+    passwords: ["alice123", "alice2024"]
+
+  bob:
+    patterns: []
+    match_mode: always_try            # try bob's passwords for every unknown file
+    priority: 1
+    passwords: ["bobpass", "bob2024"]
+
+fallback_passwords:
+  - "123456"
+  - "password"
+  - "12345678"
+  - "qwerty"
+  - ""   # empty = try without password

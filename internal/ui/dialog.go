@@ -1,0 +1,222 @@
+//go:build windows
+
+package ui
+
+import (
+	"fmt"
+	"strings"
+	"syscall"
+	"unsafe"
+
+	"github.com/ncruces/zenity"
+	"golang.org/x/sys/windows"
+)
+
+const mutexName = "Global\\SmartExtractDialog"
+
+// DialogResult holds the result of the password dialog
+type DialogResult struct {
+	Password   string
+	Action     string // "cache", "person:<name>", "new_person:<name>:<pattern>"
+	PersonName string
+	Pattern    string
+}
+
+// AcquireMutex acquires the named mutex so only one dialog shows at a time.
+// Returns the mutex handle; call ReleaseMutex(handle) when done.
+func AcquireMutex() (windows.Handle, error) {
+	name, err := windows.UTF16PtrFromString(mutexName)
+	if err != nil {
+		return 0, err
+	}
+	handle, err := windows.CreateMutex(nil, false, name)
+	if err != nil {
+		return 0, fmt.Errorf("creating mutex: %w", err)
+	}
+	// Wait for the mutex (timeout 30s)
+	event, err := windows.WaitForSingleObject(handle, 30000)
+	if err != nil {
+		windows.CloseHandle(handle)
+		return 0, fmt.Errorf("waiting for mutex: %w", err)
+	}
+	if event == uint32(windows.WAIT_TIMEOUT) {
+		windows.CloseHandle(handle)
+		return 0, fmt.Errorf("timed out waiting for dialog mutex")
+	}
+	return handle, nil
+}
+
+// ReleaseMutexHandle releases a previously acquired mutex
+func ReleaseMutexHandle(handle windows.Handle) {
+	windows.ReleaseMutex(handle)
+	windows.CloseHandle(handle)
+}
+
+// AskPassword shows a native Windows input dialog asking for a password.
+// Returns the entered password or an error if cancelled.
+func AskPassword(archiveName string) (string, error) {
+	handle, err := AcquireMutex()
+	if err != nil {
+		return "", err
+	}
+	defer ReleaseMutexHandle(handle)
+
+	password, err := zenity.Entry(
+		fmt.Sprintf("无法解压 %s，请输入密码：", archiveName),
+		zenity.Title("智能解压 - 需要密码"),
+		zenity.HideText(),
+	)
+	if err != nil {
+		if err == zenity.ErrCanceled {
+			return "", fmt.Errorf("用户取消")
+		}
+		return "", err
+	}
+	return password, nil
+}
+
+// AskAttribution shows a dropdown dialog to ask where the file belongs.
+// existingPeople is the list of known person names.
+// Returns a DialogResult indicating the user's choice.
+func AskAttribution(archiveName string, existingPeople []string) (*DialogResult, error) {
+	handle, err := AcquireMutex()
+	if err != nil {
+		return nil, err
+	}
+	defer ReleaseMutexHandle(handle)
+
+	// Build the items list
+	items := []string{"仅记住文件名"}
+	for _, p := range existingPeople {
+		items = append(items, "归属于: "+p)
+	}
+	items = append(items, "新建人物...")
+
+	chosen, err := zenity.List(
+		fmt.Sprintf("文件 %s 的密码归属：", archiveName),
+		items,
+		zenity.Title("智能解压 - 密码归属"),
+	)
+	if err != nil {
+		if err == zenity.ErrCanceled {
+			return &DialogResult{Action: "cache"}, nil
+		}
+		return nil, err
+	}
+
+	result := &DialogResult{}
+
+	switch {
+	case chosen == "仅记住文件名":
+		result.Action = "cache"
+
+	case strings.HasPrefix(chosen, "归属于: "):
+		personName := strings.TrimPrefix(chosen, "归属于: ")
+		result.Action = "person"
+		result.PersonName = personName
+
+	case chosen == "新建人物...":
+		// Ask for person name
+		name, err := zenity.Entry(
+			"请输入新人物名称：",
+			zenity.Title("智能解压 - 新建人物"),
+		)
+		if err != nil || name == "" {
+			result.Action = "cache"
+			return result, nil
+		}
+		// Ask for optional regex pattern
+		pattern, err := zenity.Entry(
+			"请输入文件名匹配模式（正则表达式，可留空）：",
+			zenity.Title("智能解压 - 匹配模式"),
+		)
+		if err != nil {
+			pattern = ""
+		}
+		result.Action = "new_person"
+		result.PersonName = name
+		result.Pattern = pattern
+	}
+
+	return result, nil
+}
+
+// AllocConsole allocates a console window for output (Windows API)
+func AllocConsole() {
+	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
+	allocConsole := kernel32.NewProc("AllocConsole")
+	allocConsole.Call()
+
+	// Redirect stdout/stderr to the new console
+	setStdHandle := kernel32.NewProc("SetStdHandle")
+	getStdHandle := kernel32.NewProc("GetStdHandle")
+
+	// STD_OUTPUT_HANDLE = -11
+	hOut, _, _ := getStdHandle.Call(uintptr(uint32(0xFFFFFFF5)))
+	setStdHandle.Call(uintptr(uint32(0xFFFFFFF5)), hOut)
+
+	// Re-open the console
+	hFile, err := windows.CreateFile(
+		windows.StringToUTF16Ptr("CONOUT$"),
+		windows.GENERIC_WRITE,
+		windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		0,
+		0,
+	)
+	if err == nil {
+		// Set console output handle
+		setStdHandle.Call(uintptr(uint32(0xFFFFFFF5)), uintptr(hFile))
+	}
+
+	// Set UTF-8 code page
+	setConsoleCP := kernel32.NewProc("SetConsoleCP")
+	setConsoleOutputCP := kernel32.NewProc("SetConsoleOutputCP")
+	setConsoleCP.Call(65001)
+	setConsoleOutputCP.Call(65001)
+
+	// Set console title
+	setTitle := kernel32.NewProc("SetConsoleTitleW")
+	titlePtr, _ := syscall.UTF16PtrFromString("智能解压")
+	setTitle.Call(uintptr(unsafe.Pointer(titlePtr)))
+}
+
+// WaitForKeypress prints a message and waits for the user to press Enter
+func WaitForKeypress(msg string) {
+	fmt.Println(msg)
+	fmt.Println("按 Enter 键关闭...")
+	var buf [1]byte
+	_ = syscall.Stdin
+	// Read one byte from stdin
+	windows.ReadConsole(
+		windows.Handle(syscall.Stdin),
+		(*uint16)(unsafe.Pointer(&buf[0])),
+		1,
+		nil,
+		nil,
+	)
+}
+
+// ConfirmPerson prompts user to confirm person identification
+func ConfirmPerson(archiveName, personName string, confidence float64) (bool, error) {
+	handle, err := AcquireMutex()
+	if err != nil {
+		return false, err
+	}
+	defer ReleaseMutexHandle(handle)
+
+	msg := fmt.Sprintf("文件 %s 可能是 %s 的？（相似度 %.0f%%）", archiveName, personName, confidence*100)
+	err = zenity.Question(msg,
+		zenity.Title("智能解压 - 确认归属"),
+		zenity.OKLabel("是"),
+		zenity.CancelLabel("否"),
+	)
+	if err == zenity.ErrCanceled {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}

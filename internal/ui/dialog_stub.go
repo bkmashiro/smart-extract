@@ -1,0 +1,39 @@
+//go:build !windows
+
+package ui
+
+import "fmt"
+
+// AllocConsole is a no-op on non-Windows platforms
+func AllocConsole() {}
+
+// WaitForKeypress prints message and waits for input on non-Windows
+func WaitForKeypress(msg string) {
+	fmt.Println(msg)
+	fmt.Println("Press Enter to close...")
+	var buf [1]byte
+	fmt.Scanf("%c", &buf[0])
+}
+
+// AskPassword stub for non-Windows
+func AskPassword(archiveName string) (string, error) {
+	return "", fmt.Errorf("not supported on this platform")
+}
+
+// DialogResult holds the result of the password dialog
+type DialogResult struct {
+	Password   string
+	Action     string
+	PersonName string
+	Pattern    string
+}
+
+// AskAttribution stub for non-Windows
+func AskAttribution(archiveName string, existingPeople []string) (*DialogResult, error) {
+	return &DialogResult{Action: "cache"}, nil
+}
+
+// ConfirmPerson stub for non-Windows
+func ConfirmPerson(archiveName, personName string, confidence float64) (bool, error) {
+	return false, nil
+}

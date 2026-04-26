@@ -1,0 +1,13 @@
+# Build output
+smart-extract.exe
+
+# Go workspace files
+go.work
+go.work.sum
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local config (don't commit personal passwords)
+learned.yaml
