@@ -1,6 +1,7 @@
 package extractor
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,9 @@ import (
 type RecursiveExtractOptions struct {
 	SevenZipPath string
 	MaxDepth     int
+	// MaxParallelProbes caps the number of parallel password workers.
+	// 0 means use runtime.NumCPU(). Default is 4.
+	MaxParallelProbes int
 	// TryPassword is called when an archive needs a password attempt.
 	// It should return a list of passwords to try, in order.
 	TryPassword func(archivePath string) ([]string, error)
@@ -41,36 +45,34 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 		opts.OnProgress(fmt.Sprintf("📦 解压 %s → %s", filepath.Base(archivePath), outputDir))
 	}
 
-	// Try each password
-	var lastResult ExtractionResult
-	tried := false
-	for _, pwd := range passwords {
-		result := TryExtract(opts.SevenZipPath, archivePath, outputDir, pwd)
-		lastResult = result
-		tried = true
-
-		if result.Success {
-			successPwd = pwd
-			if opts.OnProgress != nil {
-				if pwd == "" {
-					opts.OnProgress("✓ 成功（无密码）")
-				} else {
-					opts.OnProgress(fmt.Sprintf("✓ 成功（密码: %s）", MaskPassword(pwd)))
-				}
-			}
-			break
-		}
-		if !result.WrongPassword {
-			// Non-password error — don't keep trying
-			return "", "", fmt.Errorf("extraction failed: %s", result.Output)
-		}
-		if opts.OnProgress != nil {
-			opts.OnProgress(fmt.Sprintf("✗ 密码错误: %s", MaskPassword(pwd)))
-		}
+	// Detect archive format and choose probe strategy
+	af := DetectFormat(archivePath, opts.SevenZipPath)
+	if opts.OnProgress != nil {
+		opts.OnProgress(fmt.Sprintf("🔍 格式: %s", DetectFormatString(af)))
 	}
 
-	if !tried || !lastResult.Success {
-		return "", "", fmt.Errorf("all passwords failed for %s", filepath.Base(archivePath))
+	maxPar := opts.MaxParallelProbes
+	if maxPar == 0 {
+		maxPar = DefaultMaxParallelProbes
+	}
+
+	// Use the appropriate probing strategy — both extract directly (no double-extraction)
+	switch af.Strategy {
+	case ProbeParallel:
+		successPwd, err = ParallelProbe(
+			context.Background(),
+			opts.SevenZipPath, archivePath, outputDir,
+			passwords, maxPar, opts.OnProgress,
+		)
+	case ProbeSerial:
+		successPwd, err = SerialProbe(
+			opts.SevenZipPath, archivePath, outputDir,
+			passwords, opts.OnProgress,
+		)
+	}
+
+	if err != nil {
+		return "", "", err
 	}
 
 	// Flatten single-folder nesting

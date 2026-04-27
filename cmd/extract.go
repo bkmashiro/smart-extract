@@ -62,8 +62,9 @@ func Extract(archivePath string) error {
 	provider.resolvedPerson = person
 
 	opts := extractor.RecursiveExtractOptions{
-		SevenZipPath: sevenZipPath,
-		MaxDepth:     10,
+		SevenZipPath:      sevenZipPath,
+		MaxDepth:          10,
+		MaxParallelProbes: cfg.MaxParallelProbes,
 		TryPassword: func(ap string) ([]string, error) {
 			// For nested archives, create a sub-provider
 			subProvider := newPasswordProvider(ap, filepath.Base(ap), cfg, learned)

@@ -12,6 +12,7 @@ import (
 // Config represents config.yaml
 type Config struct {
 	SevenZipPath      string             `yaml:"sevenzip_path"`
+	MaxParallelProbes int                `yaml:"max_parallel_probes,omitempty"`
 	People            map[string]*Person `yaml:"people"`
 	FallbackPasswords []string           `yaml:"fallback_passwords"`
 }
