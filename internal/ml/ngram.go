@@ -4,7 +4,6 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 )
 
 // NgramVector is a TF feature vector of character n-grams
@@ -117,7 +116,7 @@ func filenameWithoutExt(name string) string {
 	base := filepath.Base(name)
 	ext := filepath.Ext(base)
 	if ext != "" {
-		base = base[:len(base)-utf8.RuneCountInString(ext)]
+		base = base[:len(base)-len(ext)]
 	}
 	return base
 }

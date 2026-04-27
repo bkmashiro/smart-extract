@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -14,6 +15,17 @@ import (
 
 // Extract is the main entry point for extracting a single archive file.
 func Extract(archivePath string) error {
+	// Resolve to absolute path to handle relative paths and symlinks
+	absPath, err := filepath.Abs(archivePath)
+	if err == nil {
+		archivePath = absPath
+	}
+
+	// Verify the file exists
+	if _, err := os.Stat(archivePath); err != nil {
+		return fmt.Errorf("文件不存在: %s", archivePath)
+	}
+
 	// Allocate console for progress display
 	ui.AllocConsole()
 
@@ -69,7 +81,7 @@ func Extract(archivePath string) error {
 		return handleUnknownPassword(archivePath, archiveName, sevenZipPath, cfg, learned, opts)
 	}
 
-	fmt.Printf("\n✓ 解压完成 → %s\n", outDir)
+	fmt.Printf("\n✓ 解压完成 → %s\n", filepath.Base(outDir))
 
 	// Record success
 	if person != "" {
@@ -299,21 +311,28 @@ func handleUnknownPassword(
 
 	_ = walkNested(outputDir, opts)
 
-	fmt.Printf("\n✓ 解压完成 → %s\n", outputDir)
+	fmt.Printf("\n✓ 解压完成 → %s\n", filepath.Base(outputDir))
 	return nil
 }
 
-// walkNested recursively extracts archives in a directory using glob
+// walkNested recursively walks dir and extracts any archives found at any depth.
 func walkNested(dir string, opts extractor.RecursiveExtractOptions) error {
-	paths, err := filepath.Glob(filepath.Join(dir, "*"))
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-	for _, path := range paths {
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+		if e.IsDir() {
+			if err := walkNested(path, opts); err != nil {
+				return err
+			}
+			continue
+		}
 		if extractor.IsArchive(path) {
 			_, _, err := extractor.RecursiveExtract(path, opts, 1)
 			if err != nil && opts.OnProgress != nil {
-				opts.OnProgress(fmt.Sprintf("警告：无法解压嵌套档案 %s: %v", filepath.Base(path), err))
+				opts.OnProgress(fmt.Sprintf("警告：无法解压嵌套档案 %s: %v", e.Name(), err))
 			}
 		}
 	}

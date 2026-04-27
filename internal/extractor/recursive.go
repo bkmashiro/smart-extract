@@ -21,8 +21,12 @@ type RecursiveExtractOptions struct {
 // passwordsToTry is the ordered list of passwords for the top-level archive.
 // Returns the output directory and the successful password (or "" if no password needed).
 func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth int) (outDir string, successPwd string, err error) {
-	if depth > 10 {
-		return "", "", fmt.Errorf("max recursion depth reached")
+	maxDepth := opts.MaxDepth
+	if maxDepth <= 0 {
+		maxDepth = 10
+	}
+	if depth > maxDepth {
+		return "", "", fmt.Errorf("max recursion depth (%d) reached", maxDepth)
 	}
 
 	outputDir := OutputDirForArchive(archivePath)
@@ -49,9 +53,9 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 			successPwd = pwd
 			if opts.OnProgress != nil {
 				if pwd == "" {
-					opts.OnProgress(fmt.Sprintf("✓ 成功（无密码）"))
+					opts.OnProgress("✓ 成功（无密码）")
 				} else {
-					opts.OnProgress(fmt.Sprintf("✓ 成功（密码: %s）", pwd))
+					opts.OnProgress(fmt.Sprintf("✓ 成功（密码: %s）", MaskPassword(pwd)))
 				}
 			}
 			break
@@ -61,7 +65,7 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 			return "", "", fmt.Errorf("extraction failed: %s", result.Output)
 		}
 		if opts.OnProgress != nil {
-			opts.OnProgress(fmt.Sprintf("✗ 密码错误: %q", pwd))
+			opts.OnProgress(fmt.Sprintf("✗ 密码错误: %s", MaskPassword(pwd)))
 		}
 	}
 

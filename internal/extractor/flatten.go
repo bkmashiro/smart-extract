@@ -8,27 +8,26 @@ import (
 
 // FlattenSingleFolder checks if outputDir contains exactly one subdirectory
 // (and no files at top level), and if so, moves its contents up to outputDir.
-// e.g., output/output/files → output/files
+// Repeats until the top level has more than one entry or contains files.
+// e.g., output/inner/deep/files → output/files
 func FlattenSingleFolder(outputDir string) error {
-	entries, err := os.ReadDir(outputDir)
-	if err != nil {
-		return err
+	for {
+		entries, err := os.ReadDir(outputDir)
+		if err != nil {
+			return err
+		}
+
+		// Check: exactly one entry, which is a directory
+		if len(entries) != 1 || !entries[0].IsDir() {
+			return nil // nothing to flatten
+		}
+
+		innerDir := filepath.Join(outputDir, entries[0].Name())
+		if err := flattenInto(innerDir, outputDir); err != nil {
+			return err
+		}
+		// Loop again — there may be another single-folder layer
 	}
-
-	// Check: exactly one entry, which is a directory
-	if len(entries) != 1 || !entries[0].IsDir() {
-		return nil // nothing to flatten
-	}
-
-	innerDir := filepath.Join(outputDir, entries[0].Name())
-
-	// Check that inner dir name != outputDir name (avoid same-name issue)
-	if entries[0].Name() == filepath.Base(outputDir) {
-		// e.g., output/output — move contents up
-		return flattenInto(innerDir, outputDir)
-	}
-
-	return nil
 }
 
 // flattenInto moves all contents of src into dst, then removes src.

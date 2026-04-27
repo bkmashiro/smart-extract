@@ -4,6 +4,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -142,23 +143,22 @@ func AskAttribution(archiveName string, existingPeople []string) (*DialogResult,
 }
 
 // AllocConsole allocates a console window for output (Windows API)
+// and redirects Go's os.Stdout and os.Stderr to the new console.
 func AllocConsole() {
 	kernel32 := windows.NewLazySystemDLL("kernel32.dll")
 	allocConsole := kernel32.NewProc("AllocConsole")
 	allocConsole.Call()
 
-	// Redirect stdout/stderr to the new console
-	setStdHandle := kernel32.NewProc("SetStdHandle")
-	getStdHandle := kernel32.NewProc("GetStdHandle")
+	// Set UTF-8 code page first
+	setConsoleCP := kernel32.NewProc("SetConsoleCP")
+	setConsoleOutputCP := kernel32.NewProc("SetConsoleOutputCP")
+	setConsoleCP.Call(65001)
+	setConsoleOutputCP.Call(65001)
 
-	// STD_OUTPUT_HANDLE = -11
-	hOut, _, _ := getStdHandle.Call(uintptr(uint32(0xFFFFFFF5)))
-	setStdHandle.Call(uintptr(uint32(0xFFFFFFF5)), hOut)
-
-	// Re-open the console
-	hFile, err := windows.CreateFile(
+	// Open CONOUT$ to get a writable handle to the new console
+	conout, err := windows.CreateFile(
 		windows.StringToUTF16Ptr("CONOUT$"),
-		windows.GENERIC_WRITE,
+		windows.GENERIC_READ|windows.GENERIC_WRITE,
 		windows.FILE_SHARE_WRITE,
 		nil,
 		windows.OPEN_EXISTING,
@@ -166,15 +166,31 @@ func AllocConsole() {
 		0,
 	)
 	if err == nil {
-		// Set console output handle
-		setStdHandle.Call(uintptr(uint32(0xFFFFFFF5)), uintptr(hFile))
+		// Update the Win32 standard handles
+		setStdHandle := kernel32.NewProc("SetStdHandle")
+		setStdHandle.Call(uintptr(0xFFFFFFF5), uintptr(conout)) // STD_OUTPUT_HANDLE
+		setStdHandle.Call(uintptr(0xFFFFFFF4), uintptr(conout)) // STD_ERROR_HANDLE
+
+		// Redirect Go's os.Stdout and os.Stderr to the new console handle
+		os.Stdout = os.NewFile(uintptr(conout), "CONOUT$")
+		os.Stderr = os.NewFile(uintptr(conout), "CONOUT$")
 	}
 
-	// Set UTF-8 code page
-	setConsoleCP := kernel32.NewProc("SetConsoleCP")
-	setConsoleOutputCP := kernel32.NewProc("SetConsoleOutputCP")
-	setConsoleCP.Call(65001)
-	setConsoleOutputCP.Call(65001)
+	// Open CONIN$ for stdin
+	conin, err := windows.CreateFile(
+		windows.StringToUTF16Ptr("CONIN$"),
+		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.FILE_SHARE_READ,
+		nil,
+		windows.OPEN_EXISTING,
+		0,
+		0,
+	)
+	if err == nil {
+		setStdHandle := kernel32.NewProc("SetStdHandle")
+		setStdHandle.Call(uintptr(0xFFFFFFF6), uintptr(conin)) // STD_INPUT_HANDLE
+		os.Stdin = os.NewFile(uintptr(conin), "CONIN$")
+	}
 
 	// Set console title
 	setTitle := kernel32.NewProc("SetConsoleTitleW")
@@ -182,10 +198,13 @@ func AllocConsole() {
 	setTitle.Call(uintptr(unsafe.Pointer(titlePtr)))
 }
 
-// WaitForKeypress prints a message and waits for the user to press Enter
+// WaitForKeypress prints a message and waits for the user to press Enter.
+// If msg is empty, a default prompt is shown.
 func WaitForKeypress(msg string) {
+	if msg == "" {
+		msg = "按 Enter 键关闭..."
+	}
 	fmt.Println(msg)
-	fmt.Println("按 Enter 键关闭...")
 	var buf [1]byte
 	_ = syscall.Stdin
 	// Read one byte from stdin

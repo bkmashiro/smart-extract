@@ -9,8 +9,10 @@ func AllocConsole() {}
 
 // WaitForKeypress prints message and waits for input on non-Windows
 func WaitForKeypress(msg string) {
+	if msg == "" {
+		msg = "Press Enter to close..."
+	}
 	fmt.Println(msg)
-	fmt.Println("Press Enter to close...")
 	var buf [1]byte
 	fmt.Scanf("%c", &buf[0])
 }

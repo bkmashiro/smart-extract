@@ -47,17 +47,30 @@ func main() {
 		}
 		ui.WaitForKeypress("")
 
+	case "--help", "-h":
+		ui.AllocConsole()
+		fmt.Println("智能解压 - 使用方法:")
+		fmt.Println("  smart-extract.exe --install    安装右键菜单")
+		fmt.Println("  smart-extract.exe --uninstall  卸载右键菜单")
+		fmt.Println("  smart-extract.exe <archive>    解压文件")
+		fmt.Println("  smart-extract.exe --help       显示帮助")
+		fmt.Println()
+		ui.WaitForKeypress("")
+
 	default:
-		// Extract the file
-		archivePath := args[0]
-		if err := cmd.Extract(archivePath); err != nil {
-			ui.AllocConsole()
-			fmt.Printf("\n✗ 解压失败: %v\n", err)
-			ui.WaitForKeypress("发生错误，按 Enter 键关闭...")
+		// Extract all provided files
+		hasError := false
+		for _, archivePath := range args {
+			if err := cmd.Extract(archivePath); err != nil {
+				ui.AllocConsole()
+				fmt.Printf("\n✗ 解压失败 (%s): %v\n", filepath.Base(archivePath), err)
+				hasError = true
+			}
+		}
+		if hasError {
+			ui.WaitForKeypress("有文件解压失败，按 Enter 键关闭...")
 			os.Exit(1)
 		}
-		// Brief pause so user can see success message
-		// (only keep window open if there was useful output)
 	}
 }
 
