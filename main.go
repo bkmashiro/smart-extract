@@ -24,9 +24,10 @@ func main() {
 	if len(args) == 0 {
 		ui.AllocConsole()
 		fmt.Println("智能解压 - 使用方法:")
-		fmt.Println("  smart-extract.exe --install    安装右键菜单")
-		fmt.Println("  smart-extract.exe --uninstall  卸载右键菜单")
-		fmt.Println("  smart-extract.exe <archive>    解压文件")
+		fmt.Println("  smart-extract.exe --install      安装右键菜单")
+		fmt.Println("  smart-extract.exe --uninstall    卸载右键菜单")
+		fmt.Println("  smart-extract.exe --reset-prefs  重置偏好设置")
+		fmt.Println("  smart-extract.exe <archive>      解压文件")
 		fmt.Println()
 		ui.WaitForKeypress("按 Enter 键关闭...")
 		return
@@ -47,13 +48,22 @@ func main() {
 		}
 		ui.WaitForKeypress("")
 
+	case "--reset-prefs":
+		ui.AllocConsole()
+		if err := config.ResetPreferences(); err != nil {
+			fatal("重置偏好失败: %v", err)
+		}
+		fmt.Println("✓ 偏好设置已重置，下次解压时将重新询问。")
+		ui.WaitForKeypress("")
+
 	case "--help", "-h":
 		ui.AllocConsole()
 		fmt.Println("智能解压 - 使用方法:")
-		fmt.Println("  smart-extract.exe --install    安装右键菜单")
-		fmt.Println("  smart-extract.exe --uninstall  卸载右键菜单")
-		fmt.Println("  smart-extract.exe <archive>    解压文件")
-		fmt.Println("  smart-extract.exe --help       显示帮助")
+		fmt.Println("  smart-extract.exe --install      安装右键菜单")
+		fmt.Println("  smart-extract.exe --uninstall    卸载右键菜单")
+		fmt.Println("  smart-extract.exe --reset-prefs  重置偏好设置")
+		fmt.Println("  smart-extract.exe <archive>      解压文件")
+		fmt.Println("  smart-extract.exe --help         显示帮助")
 		fmt.Println()
 		ui.WaitForKeypress("")
 

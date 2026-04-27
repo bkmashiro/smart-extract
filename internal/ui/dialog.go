@@ -217,6 +217,30 @@ func WaitForKeypress(msg string) {
 	)
 }
 
+// AskDeletePreference shows a yes/no dialog asking whether to delete the original archive.
+// Returns true if user wants to delete, false to keep.
+func AskDeletePreference() (bool, error) {
+	handle, err := AcquireMutex()
+	if err != nil {
+		return false, err
+	}
+	defer ReleaseMutexHandle(handle)
+
+	err = zenity.Question(
+		"解压完成！是否删除原始压缩包？\n\n（以后不再询问，记住我的选择）",
+		zenity.Title("智能解压 - 删除原始文件"),
+		zenity.OKLabel("是，删除"),
+		zenity.CancelLabel("否，保留"),
+	)
+	if err == zenity.ErrCanceled {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ConfirmPerson prompts user to confirm person identification
 func ConfirmPerson(archiveName, personName string, confidence float64) (bool, error) {
 	handle, err := AcquireMutex()

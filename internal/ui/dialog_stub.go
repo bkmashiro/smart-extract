@@ -35,6 +35,11 @@ func AskAttribution(archiveName string, existingPeople []string) (*DialogResult,
 	return &DialogResult{Action: "cache"}, nil
 }
 
+// AskDeletePreference stub for non-Windows
+func AskDeletePreference() (bool, error) {
+	return false, nil
+}
+
 // ConfirmPerson stub for non-Windows
 func ConfirmPerson(archiveName, personName string, confidence float64) (bool, error) {
 	return false, nil

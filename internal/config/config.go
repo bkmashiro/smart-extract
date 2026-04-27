@@ -24,11 +24,18 @@ type Person struct {
 	Passwords []string `yaml:"passwords"`
 }
 
+// Preferences stores user preferences in learned.yaml
+type Preferences struct {
+	DeleteAfterExtract  bool `yaml:"delete_after_extract"`
+	DeletePreferenceSet bool `yaml:"delete_preference_set"`
+}
+
 // Learned represents learned.yaml
 type Learned struct {
-	Exact          map[string]string                     `yaml:"exact"`
-	PersonStats    map[string]map[string]*BetaStats      `yaml:"person_stats"`
-	PersonFilenames map[string][]string                  `yaml:"person_filenames"`
+	Exact           map[string]string                     `yaml:"exact"`
+	PersonStats     map[string]map[string]*BetaStats      `yaml:"person_stats"`
+	PersonFilenames map[string][]string                   `yaml:"person_filenames"`
+	Preferences     Preferences                           `yaml:"preferences"`
 }
 
 // BetaStats stores Thompson Sampling parameters
@@ -258,6 +265,27 @@ func AddPerson(name string, patterns []string, passwords []string, matchMode str
 		Passwords: passwords,
 	}
 	return SaveConfig(c)
+}
+
+// SaveDeletePreference saves the user's delete-after-extract preference
+func SaveDeletePreference(deleteAfterExtract bool) error {
+	l, err := LoadLearned()
+	if err != nil {
+		return err
+	}
+	l.Preferences.DeleteAfterExtract = deleteAfterExtract
+	l.Preferences.DeletePreferenceSet = true
+	return SaveLearned(l)
+}
+
+// ResetPreferences clears the preferences so dialogs show again next time
+func ResetPreferences() error {
+	l, err := LoadLearned()
+	if err != nil {
+		return err
+	}
+	l.Preferences = Preferences{}
+	return SaveLearned(l)
 }
 
 // SaveExactCache saves a filename→password mapping

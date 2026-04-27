@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 
 	"github.com/bkmashiro/smart-extract/internal/config"
 	"github.com/bkmashiro/smart-extract/internal/extractor"
@@ -99,6 +100,9 @@ func Extract(archivePath string) error {
 			}
 		}
 	}
+
+	// Handle delete-after-extract preference
+	handleDeleteAfterExtract(archivePath, outDir)
 
 	return nil
 }
@@ -312,6 +316,10 @@ func handleUnknownPassword(
 	_ = walkNested(outputDir, opts)
 
 	fmt.Printf("\n✓ 解压完成 → %s\n", filepath.Base(outputDir))
+
+	// Handle delete-after-extract preference
+	handleDeleteAfterExtract(archivePath, outputDir)
+
 	return nil
 }
 
@@ -337,6 +345,88 @@ func walkNested(dir string, opts extractor.RecursiveExtractOptions) error {
 		}
 	}
 	return nil
+}
+
+// handleDeleteAfterExtract checks the user's preference for deleting archives
+// after successful extraction. If not set, shows a dialog to ask. Then applies
+// the preference.
+func handleDeleteAfterExtract(archivePath, outDir string) {
+	// Verify the output directory exists and is non-empty
+	entries, err := os.ReadDir(outDir)
+	if err != nil || len(entries) == 0 {
+		return
+	}
+
+	// Reload learned data to get current preferences
+	config.ReloadAll()
+	l, err := config.LoadLearned()
+	if err != nil {
+		fmt.Printf("警告：无法加载偏好设置: %v\n", err)
+		return
+	}
+
+	shouldDelete := false
+
+	if !l.Preferences.DeletePreferenceSet {
+		// First time — ask the user
+		wantDelete, err := ui.AskDeletePreference()
+		if err != nil {
+			fmt.Printf("警告：无法显示删除确认对话框: %v\n", err)
+			return
+		}
+		// Save the preference
+		if err := config.SaveDeletePreference(wantDelete); err != nil {
+			fmt.Printf("警告：无法保存偏好设置: %v\n", err)
+		}
+		shouldDelete = wantDelete
+	} else {
+		shouldDelete = l.Preferences.DeleteAfterExtract
+	}
+
+	if shouldDelete {
+		deleteArchiveWithParts(archivePath)
+	}
+}
+
+// deleteArchiveWithParts deletes the archive file and, for multi-part archives
+// (.zip.001 etc.), deletes all parts (.001, .002, ...).
+func deleteArchiveWithParts(archivePath string) {
+	lower := strings.ToLower(archivePath)
+
+	// Check if this is a multi-part archive (.zip.001, .7z.001, .rar.001)
+	if strings.HasSuffix(lower, ".001") {
+		withoutPart := archivePath[:len(archivePath)-4]
+		withoutPartLower := strings.ToLower(withoutPart)
+		partExt := filepath.Ext(withoutPartLower)
+		isMultiPart := false
+		switch partExt {
+		case ".zip", ".7z", ".rar":
+			isMultiPart = true
+		}
+
+		if isMultiPart {
+			// Delete all parts: .001, .002, .003, ...
+			for i := 1; i < 10000; i++ {
+				partPath := fmt.Sprintf("%s.%03d", withoutPart, i)
+				if _, err := os.Stat(partPath); os.IsNotExist(err) {
+					break
+				}
+				if err := os.Remove(partPath); err != nil {
+					fmt.Printf("警告：无法删除分卷 %s: %v\n", filepath.Base(partPath), err)
+				} else {
+					fmt.Printf("🗑 已删除分卷: %s\n", filepath.Base(partPath))
+				}
+			}
+			return
+		}
+	}
+
+	// Single archive file
+	if err := os.Remove(archivePath); err != nil {
+		fmt.Printf("警告：无法删除原始压缩包 %s: %v\n", filepath.Base(archivePath), err)
+	} else {
+		fmt.Printf("🗑 已删除原始压缩包: %s\n", filepath.Base(archivePath))
+	}
 }
 
 // filenameBase returns the filename without extension
