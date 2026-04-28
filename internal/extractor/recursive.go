@@ -72,7 +72,21 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 	}
 
 	if err != nil {
-		return "", "", err
+		// Check if the failure is a "not archive" error — try steganographic format forcing
+		if IsProbeNotArchive(err) {
+			if opts.OnProgress != nil {
+				opts.OnProgress("🔍 检测到非标准存档格式，尝试隐写存档检测...")
+			}
+			successPwd, err = trySteganographicExtract(
+				opts.SevenZipPath, archivePath, outputDir,
+				passwords, maxPar, af.Strategy, opts.OnProgress,
+			)
+			if err != nil {
+				return "", "", err
+			}
+		} else {
+			return "", "", err
+		}
 	}
 
 	// Flatten single-folder nesting
@@ -90,6 +104,89 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 	}
 
 	return outputDir, successPwd, nil
+}
+
+// trySteganographicExtract retries extraction with forced format types (-tzip, -t7z, -trar).
+// For each format, it tries all passwords. If all formats fail, it tries Bandizip as a last resort.
+func trySteganographicExtract(
+	sevenZipPath, archivePath, outputDir string,
+	passwords []string, maxWorkers int,
+	strategy ProbeStrategy,
+	onProgress func(string),
+) (string, error) {
+	for _, formatFlag := range SteganographicFormats {
+		formatName := formatFlag[2:] // strip "-t" prefix
+		if onProgress != nil {
+			onProgress(fmt.Sprintf("🔄 尝试强制格式: %s", formatName))
+		}
+
+		for _, pwd := range passwords {
+			tempDir := outputDir + "_stego_probe"
+			result := TryExtractWithFormat(sevenZipPath, archivePath, tempDir, pwd, formatFlag)
+
+			if result.Success {
+				// Move temp dir to final output
+				if err := os.Rename(tempDir, outputDir); err != nil {
+					if err2 := moveContents(tempDir, outputDir); err2 != nil {
+						os.RemoveAll(tempDir)
+						return "", fmt.Errorf("failed to move extraction result: %v (rename: %v)", err2, err)
+					}
+				}
+				os.RemoveAll(tempDir)
+
+				if onProgress != nil {
+					onProgress(fmt.Sprintf("⚠ 检测到隐写存档 (format: %s)，已成功解压", formatName))
+				}
+				return pwd, nil
+			}
+
+			os.RemoveAll(tempDir)
+
+			// If "not archive" with this format too, skip remaining passwords for this format
+			if result.NotArchive {
+				break
+			}
+
+			// If wrong password, try next password
+			if result.WrongPassword {
+				if onProgress != nil {
+					onProgress(fmt.Sprintf("✗ %s 密码错误: %s", formatName, MaskPassword(pwd)))
+				}
+				continue
+			}
+
+			// Other error — skip this format
+			break
+		}
+	}
+
+	// All forced formats failed — try Bandizip as last resort
+	bandizipPath := FindBandizip()
+	if bandizipPath != "" {
+		if onProgress != nil {
+			onProgress("🔄 尝试 Bandizip 解压...")
+		}
+		for _, pwd := range passwords {
+			tempDir := outputDir + "_bz_probe"
+			result := TryBandizipExtract(bandizipPath, archivePath, tempDir, pwd)
+			if result.Success {
+				if err := os.Rename(tempDir, outputDir); err != nil {
+					if err2 := moveContents(tempDir, outputDir); err2 != nil {
+						os.RemoveAll(tempDir)
+						return "", fmt.Errorf("failed to move extraction result: %v (rename: %v)", err2, err)
+					}
+				}
+				os.RemoveAll(tempDir)
+				if onProgress != nil {
+					onProgress("⚠ 检测到隐写存档 (Bandizip)，已成功解压")
+				}
+				return pwd, nil
+			}
+			os.RemoveAll(tempDir)
+		}
+	}
+
+	return "", fmt.Errorf("steganographic extraction failed for %s: no format/password combination worked", filepath.Base(archivePath))
 }
 
 // walkAndExtract walks a directory and extracts any archives found

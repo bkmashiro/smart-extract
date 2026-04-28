@@ -50,10 +50,11 @@ func FindSevenZip(configPath string) (string, error) {
 
 // ExtractionResult holds the outcome of a single extraction attempt
 type ExtractionResult struct {
-	Success      bool
+	Success       bool
 	WrongPassword bool
-	Output       string
-	Error        error
+	NotArchive    bool // true when 7z says "not archive" / "Cannot open the file as archive"
+	Output        string
+	Error         error
 }
 
 // TryExtract attempts to extract an archive with a given password.
@@ -97,8 +98,107 @@ func TryExtract(sevenZipPath, archivePath, outputDir, password string) Extractio
 		return ExtractionResult{Success: false, WrongPassword: true, Output: outStr}
 	}
 
+	// Check for "not archive" indicators (steganographic archives, wrong format)
+	if IsNotArchiveError(outStr) {
+		cleanupEmptyDir(outputDir)
+		return ExtractionResult{Success: false, NotArchive: true, Output: outStr, Error: err}
+	}
+
 	return ExtractionResult{Success: false, WrongPassword: false, Output: outStr, Error: err}
 }
+
+// TryExtractWithFormat attempts to extract an archive with a forced format type flag (e.g. "-tzip").
+func TryExtractWithFormat(sevenZipPath, archivePath, outputDir, password, formatFlag string) ExtractionResult {
+	args := []string{"x"}
+	if password != "" {
+		args = append(args, "-p"+password)
+	} else {
+		args = append(args, "-p")
+	}
+	args = append(args,
+		formatFlag,
+		"-o"+outputDir,
+		archivePath,
+		"-y",
+		"-aoa",
+		"-sccUTF-8",
+	)
+
+	cmd := exec.Command(sevenZipPath, args...)
+	hideCmdWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	outStr := string(out)
+
+	if err == nil {
+		return ExtractionResult{Success: true, Output: outStr}
+	}
+
+	outLower := strings.ToLower(outStr)
+	if strings.Contains(outLower, "wrong password") ||
+		strings.Contains(outLower, "cannot open encrypted archive") ||
+		strings.Contains(outLower, "data error") ||
+		strings.Contains(outLower, "crc failed") ||
+		strings.Contains(outLower, "headers error") {
+		cleanupEmptyDir(outputDir)
+		return ExtractionResult{Success: false, WrongPassword: true, Output: outStr}
+	}
+
+	if IsNotArchiveError(outStr) {
+		cleanupEmptyDir(outputDir)
+		return ExtractionResult{Success: false, NotArchive: true, Output: outStr, Error: err}
+	}
+
+	return ExtractionResult{Success: false, WrongPassword: false, Output: outStr, Error: err}
+}
+
+// IsNotArchiveError returns true when 7z output indicates the file is not recognized as an archive.
+func IsNotArchiveError(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "cannot open the file as archive") ||
+		strings.Contains(lower, "is not archive") ||
+		strings.Contains(lower, "can not open output file") ||
+		strings.Contains(lower, "no files to process")
+}
+
+// FindBandizip locates Bandizip CLI (bc.exe).
+func FindBandizip() string {
+	// Check PATH first
+	if p, err := exec.LookPath("bc.exe"); err == nil {
+		return p
+	}
+	if p, err := exec.LookPath("bc"); err == nil {
+		return p
+	}
+	// Common install location
+	candidate := `C:\Program Files\Bandizip\bc.exe`
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	return ""
+}
+
+// TryBandizipExtract attempts extraction using Bandizip CLI (bc.exe).
+func TryBandizipExtract(bandizipPath, archivePath, outputDir, password string) ExtractionResult {
+	args := []string{"x"}
+	args = append(args, "-o:"+outputDir)
+	if password != "" {
+		args = append(args, "-p:"+password)
+	}
+	args = append(args, archivePath)
+
+	cmd := exec.Command(bandizipPath, args...)
+	hideCmdWindow(cmd)
+	out, err := cmd.CombinedOutput()
+	outStr := string(out)
+
+	if err == nil {
+		return ExtractionResult{Success: true, Output: outStr}
+	}
+	return ExtractionResult{Success: false, Output: outStr, Error: err}
+}
+
+// SteganographicFormats is the ordered list of format flags to try for steganographic archives.
+var SteganographicFormats = []string{"-tzip", "-t7z", "-trar"}
 
 // MaskPassword returns a masked version of a password for display.
 func MaskPassword(pwd string) string {

@@ -16,11 +16,12 @@ const DefaultMaxParallelProbes = 4
 
 // ParallelProbeResult holds the result of a parallel password probe.
 type ParallelProbeResult struct {
-	Success  bool
-	Password string
-	TempDir  string // temp directory where extraction landed
-	Output   string
-	Error    error
+	Success    bool
+	Password   string
+	TempDir    string // temp directory where extraction landed
+	Output     string
+	Error      error
+	NotArchive bool // true if 7z said "not archive" (not a password issue)
 }
 
 // ParallelProbe tries passwords in parallel using a worker pool.
@@ -89,6 +90,17 @@ func ParallelProbe(ctx context.Context, sevenZipPath, archivePath, finalOutputDi
 				// Failed — clean up temp dir
 				os.RemoveAll(tempDir)
 
+				// "Not archive" error — won't be fixed by other passwords
+				if result.NotArchive {
+					resultCh <- ParallelProbeResult{
+						Success:    false,
+						NotArchive: true,
+						Output:     result.Output,
+					}
+					cancel()
+					return
+				}
+
 				if onProgress != nil {
 					onProgress(fmt.Sprintf("✗ 密码错误: %s", MaskPassword(ipw.password)))
 				}
@@ -112,10 +124,16 @@ func ParallelProbe(ctx context.Context, sevenZipPath, archivePath, finalOutputDi
 
 	// Collect result
 	var winner *ParallelProbeResult
+	var notArchiveResult *ParallelProbeResult
 	for r := range resultCh {
 		if r.Success {
 			rCopy := r
 			winner = &rCopy
+			break
+		}
+		if r.NotArchive {
+			rCopy := r
+			notArchiveResult = &rCopy
 			break
 		}
 	}
@@ -124,8 +142,18 @@ func ParallelProbe(ctx context.Context, sevenZipPath, archivePath, finalOutputDi
 	cancel()
 	wg.Wait()
 
+	if notArchiveResult != nil {
+		return "", &ProbeError{
+			Message:    fmt.Sprintf("not recognized as archive: %s", filepath.Base(archivePath)),
+			NotArchive: true,
+		}
+	}
+
 	if winner == nil {
-		return "", fmt.Errorf("all passwords failed for %s", filepath.Base(archivePath))
+		return "", &ProbeError{
+			Message:    fmt.Sprintf("all passwords failed for %s", filepath.Base(archivePath)),
+			NotArchive: false,
+		}
 	}
 
 	// Rename winner's temp dir to final output dir
@@ -166,6 +194,8 @@ func SerialProbe(sevenZipPath, archivePath, finalOutputDir string, passwords []s
 		return "", fmt.Errorf("no passwords to try")
 	}
 
+	sawNotArchive := false
+
 	for _, pwd := range passwords {
 		tempDir := finalOutputDir + "_probe"
 		result := TryExtract(sevenZipPath, archivePath, tempDir, pwd)
@@ -192,6 +222,15 @@ func SerialProbe(sevenZipPath, archivePath, finalOutputDir string, passwords []s
 		// Clean up failed temp dir
 		os.RemoveAll(tempDir)
 
+		if result.NotArchive {
+			sawNotArchive = true
+			// "Not archive" errors won't be fixed by a different password; stop early
+			return "", &ProbeError{
+				Message:    fmt.Sprintf("not recognized as archive: %s", filepath.Base(archivePath)),
+				NotArchive: true,
+			}
+		}
+
 		if !result.WrongPassword {
 			return "", fmt.Errorf("extraction failed: %s", result.Output)
 		}
@@ -201,7 +240,30 @@ func SerialProbe(sevenZipPath, archivePath, finalOutputDir string, passwords []s
 		}
 	}
 
-	return "", fmt.Errorf("all passwords failed for %s", filepath.Base(archivePath))
+	_ = sawNotArchive
+	return "", &ProbeError{
+		Message:    fmt.Sprintf("all passwords failed for %s", filepath.Base(archivePath)),
+		NotArchive: false,
+	}
+}
+
+// ProbeError is returned by SerialProbe/ParallelProbe with extra context
+// about why extraction failed (wrong passwords vs not an archive).
+type ProbeError struct {
+	Message    string
+	NotArchive bool // true if 7z said "not archive"
+}
+
+func (e *ProbeError) Error() string {
+	return e.Message
+}
+
+// IsProbeNotArchive checks if an error from probing indicates "not archive".
+func IsProbeNotArchive(err error) bool {
+	if pe, ok := err.(*ProbeError); ok {
+		return pe.NotArchive
+	}
+	return false
 }
 
 type indexedPassword struct {
@@ -248,6 +310,11 @@ func tryExtractWithCancel(ctx context.Context, sevenZipPath, archivePath, output
 		strings.Contains(outLower, "crc failed") ||
 		strings.Contains(outLower, "headers error") {
 		return ExtractionResult{Success: false, WrongPassword: true, Output: outStr}
+	}
+
+	// Check for "not archive" indicators
+	if IsNotArchiveError(outStr) {
+		return ExtractionResult{Success: false, NotArchive: true, Output: outStr, Error: err}
 	}
 
 	return ExtractionResult{Success: false, WrongPassword: false, Output: outStr, Error: err}
