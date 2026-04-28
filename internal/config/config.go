@@ -33,10 +33,11 @@ type Preferences struct {
 
 // Learned represents learned.yaml
 type Learned struct {
-	Exact           map[string]string                     `yaml:"exact"`
-	PersonStats     map[string]map[string]*BetaStats      `yaml:"person_stats"`
-	PersonFilenames map[string][]string                   `yaml:"person_filenames"`
-	Preferences     Preferences                           `yaml:"preferences"`
+	Exact            map[string]string                     `yaml:"exact"`
+	PersonStats      map[string]map[string]*BetaStats      `yaml:"person_stats"`
+	PersonFilenames  map[string][]string                   `yaml:"person_filenames"`
+	PasswordHitCount map[string]int                        `yaml:"password_hit_count,omitempty"`
+	Preferences      Preferences                           `yaml:"preferences"`
 }
 
 // BetaStats stores Thompson Sampling parameters
@@ -135,6 +136,9 @@ func LoadLearned() (*Learned, error) {
 	if l.PersonFilenames == nil {
 		l.PersonFilenames = make(map[string][]string)
 	}
+	if l.PasswordHitCount == nil {
+		l.PasswordHitCount = make(map[string]int)
+	}
 	learned = &l
 	return learned, nil
 }
@@ -177,9 +181,10 @@ func defaultConfig() *Config {
 
 func emptyLearned() *Learned {
 	return &Learned{
-		Exact:           make(map[string]string),
-		PersonStats:     make(map[string]map[string]*BetaStats),
-		PersonFilenames: make(map[string][]string),
+		Exact:            make(map[string]string),
+		PersonStats:      make(map[string]map[string]*BetaStats),
+		PersonFilenames:  make(map[string][]string),
+		PasswordHitCount: make(map[string]int),
 	}
 }
 
@@ -296,5 +301,61 @@ func SaveExactCache(filename, password string) error {
 		return err
 	}
 	l.Exact[filename] = password
+	return SaveLearned(l)
+}
+
+// FindPersonByPassword scans all people in config.yaml and returns the person
+// name if any person has this exact password in their list. Returns "" if none.
+func FindPersonByPassword(password string) string {
+	c, err := LoadConfig()
+	if err != nil {
+		return ""
+	}
+	for name, person := range c.People {
+		for _, pw := range person.Passwords {
+			if pw == password {
+				return name
+			}
+		}
+	}
+	return ""
+}
+
+// IncrementPasswordHitCount increments the hit counter for a password in learned.yaml
+// and returns the new count.
+func IncrementPasswordHitCount(password string) (int, error) {
+	l, err := LoadLearned()
+	if err != nil {
+		return 0, err
+	}
+	if l.PasswordHitCount == nil {
+		l.PasswordHitCount = make(map[string]int)
+	}
+	l.PasswordHitCount[password]++
+	count := l.PasswordHitCount[password]
+	return count, SaveLearned(l)
+}
+
+// GetPasswordHitCount returns the current hit count for a password.
+func GetPasswordHitCount(password string) int {
+	l, err := LoadLearned()
+	if err != nil {
+		return 0
+	}
+	if l.PasswordHitCount == nil {
+		return 0
+	}
+	return l.PasswordHitCount[password]
+}
+
+// ClearPasswordHitCount removes the hit counter for a password (after it's assigned to a person).
+func ClearPasswordHitCount(password string) error {
+	l, err := LoadLearned()
+	if err != nil {
+		return err
+	}
+	if l.PasswordHitCount != nil {
+		delete(l.PasswordHitCount, password)
+	}
 	return SaveLearned(l)
 }

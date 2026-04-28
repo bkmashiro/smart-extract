@@ -30,8 +30,13 @@ type DialogResult struct {
 	Pattern    string
 }
 
-// AskAttribution stub for non-Windows
-func AskAttribution(archiveName string, existingPeople []string) (*DialogResult, error) {
+// AskNewPasswordAttribution stub for non-Windows
+func AskNewPasswordAttribution(archiveName string) (*DialogResult, error) {
+	return &DialogResult{Action: "cache"}, nil
+}
+
+// SuggestCreatePerson stub for non-Windows
+func SuggestCreatePerson(password string, hitCount int) (*DialogResult, error) {
 	return &DialogResult{Action: "cache"}, nil
 }
 

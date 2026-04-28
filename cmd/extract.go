@@ -260,55 +260,36 @@ func handleUnknownPassword(
 
 	fmt.Printf("✓ 解压成功\n")
 
-	// Ask for attribution
-	var existingPeople []string
-	for name := range cfg.People {
-		existingPeople = append(existingPeople, name)
-	}
-	sort.Strings(existingPeople)
-
-	attribution, err := ui.AskAttribution(archiveName, existingPeople)
-	if err != nil {
+	// Step 1: Check if this password already belongs to a known person
+	existingPerson := config.FindPersonByPassword(password)
+	if existingPerson != "" {
+		// Auto-assign silently — password already belongs to a known person
+		fmt.Printf("✓ 密码自动匹配到人物: %s\n", existingPerson)
+		_ = config.RecordSuccess(existingPerson, password)
+		_ = config.AddPersonFilename(existingPerson, filenameBase(archiveName))
 		_ = config.SaveExactCache(archiveName, password)
-		return nil
-	}
+	} else {
+		// This is a genuinely new password — increment hit counter
+		hitCount, _ := config.IncrementPasswordHitCount(password)
 
-	switch attribution.Action {
-	case "cache":
-		if err := config.SaveExactCache(archiveName, password); err != nil {
-			fmt.Printf("警告：保存密码缓存失败: %v\n", err)
+		// Step 3: Check if this password has been used 3+ times — suggest creating a person
+		if hitCount >= 3 {
+			fmt.Printf("\n💡 这个密码已经用了%d次了\n", hitCount)
+			attribution, err := ui.SuggestCreatePerson(password, hitCount)
+			if err != nil {
+				_ = config.SaveExactCache(archiveName, password)
+			} else {
+				handleNewPasswordAttribution(attribution, archiveName, password)
+			}
 		} else {
-			fmt.Printf("✓ 已保存到文件名缓存\n")
-		}
-		// Auto-clustering hint
-		config.ReloadAll()
-		if freshLearned, lerr := config.LoadLearned(); lerr == nil {
-			hint := ml.CheckClusteringHint(password, freshLearned)
-			if hint != "" {
-				fmt.Printf("\n💡 %s\n", hint)
+			// Step 2: Show simplified dialog — only "新建人物" / "仅记住文件名"
+			attribution, err := ui.AskNewPasswordAttribution(archiveName)
+			if err != nil {
+				_ = config.SaveExactCache(archiveName, password)
+			} else {
+				handleNewPasswordAttribution(attribution, archiveName, password)
 			}
 		}
-
-	case "person":
-		if err := config.AddPersonPassword(attribution.PersonName, password); err != nil {
-			fmt.Printf("警告：添加密码失败: %v\n", err)
-		} else {
-			fmt.Printf("✓ 已将密码添加到 %s 的档案\n", attribution.PersonName)
-		}
-		_ = config.RecordSuccess(attribution.PersonName, password)
-		_ = config.AddPersonFilename(attribution.PersonName, filenameBase(archiveName))
-
-	case "new_person":
-		patterns := []string{}
-		if attribution.Pattern != "" {
-			patterns = []string{attribution.Pattern}
-		}
-		if err := config.AddPerson(attribution.PersonName, patterns, []string{password}, "pattern"); err != nil {
-			fmt.Printf("警告：创建人物档案失败: %v\n", err)
-		} else {
-			fmt.Printf("✓ 已创建人物档案: %s\n", attribution.PersonName)
-		}
-		_ = config.AddPersonFilename(attribution.PersonName, filenameBase(archiveName))
 	}
 
 	// Flatten and recurse nested archives
@@ -322,6 +303,33 @@ func handleUnknownPassword(
 	handleDeleteAfterExtract(archivePath, outputDir)
 
 	return nil
+}
+
+// handleNewPasswordAttribution processes the result of a new-password dialog
+func handleNewPasswordAttribution(attribution *ui.DialogResult, archiveName, password string) {
+	switch attribution.Action {
+	case "cache":
+		if err := config.SaveExactCache(archiveName, password); err != nil {
+			fmt.Printf("警告：保存密码缓存失败: %v\n", err)
+		} else {
+			fmt.Printf("✓ 已保存到文件名缓存\n")
+		}
+
+	case "new_person":
+		patterns := []string{}
+		if attribution.Pattern != "" {
+			patterns = []string{attribution.Pattern}
+		}
+		if err := config.AddPerson(attribution.PersonName, patterns, []string{password}, "pattern"); err != nil {
+			fmt.Printf("警告：创建人物档案失败: %v\n", err)
+		} else {
+			fmt.Printf("✓ 已创建人物档案: %s\n", attribution.PersonName)
+		}
+		_ = config.AddPersonFilename(attribution.PersonName, filenameBase(archiveName))
+		_ = config.SaveExactCache(archiveName, password)
+		// Clear hit counter since password is now assigned to a person
+		_ = config.ClearPasswordHitCount(password)
+	}
 }
 
 // walkNested recursively walks dir and extracts any archives found at any depth.

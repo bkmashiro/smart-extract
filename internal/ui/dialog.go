@@ -5,7 +5,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"strings"
 	"syscall"
 	"unsafe"
 
@@ -76,27 +75,22 @@ func AskPassword(archiveName string) (string, error) {
 	return password, nil
 }
 
-// AskAttribution shows a dropdown dialog to ask where the file belongs.
-// existingPeople is the list of known person names.
+// AskNewPasswordAttribution shows a simplified dialog for a genuinely new password.
+// Only two options: "新建人物" or "仅记住文件名" (no "已有人物" dropdown).
 // Returns a DialogResult indicating the user's choice.
-func AskAttribution(archiveName string, existingPeople []string) (*DialogResult, error) {
+func AskNewPasswordAttribution(archiveName string) (*DialogResult, error) {
 	handle, err := AcquireMutex()
 	if err != nil {
 		return nil, err
 	}
 	defer ReleaseMutexHandle(handle)
 
-	// Build the items list
-	items := []string{"仅记住文件名"}
-	for _, p := range existingPeople {
-		items = append(items, "归属于: "+p)
-	}
-	items = append(items, "新建人物...")
+	items := []string{"仅记住文件名", "新建人物"}
 
 	chosen, err := zenity.List(
-		fmt.Sprintf("文件 %s 的密码归属：", archiveName),
+		fmt.Sprintf("这是一个新密码。要创建一个人物来记住它吗？\n文件: %s", archiveName),
 		items,
-		zenity.Title("智能解压 - 密码归属"),
+		zenity.Title("智能解压 - 新密码"),
 	)
 	if err != nil {
 		if err == zenity.ErrCanceled {
@@ -107,16 +101,11 @@ func AskAttribution(archiveName string, existingPeople []string) (*DialogResult,
 
 	result := &DialogResult{}
 
-	switch {
-	case chosen == "仅记住文件名":
+	switch chosen {
+	case "仅记住文件名":
 		result.Action = "cache"
 
-	case strings.HasPrefix(chosen, "归属于: "):
-		personName := strings.TrimPrefix(chosen, "归属于: ")
-		result.Action = "person"
-		result.PersonName = personName
-
-	case chosen == "新建人物...":
+	case "新建人物":
 		// Ask for person name
 		name, err := zenity.Entry(
 			"请输入新人物名称：",
@@ -127,6 +116,60 @@ func AskAttribution(archiveName string, existingPeople []string) (*DialogResult,
 			return result, nil
 		}
 		// Ask for optional regex pattern
+		pattern, err := zenity.Entry(
+			"请输入文件名匹配模式（正则表达式，可留空）：",
+			zenity.Title("智能解压 - 匹配模式"),
+		)
+		if err != nil {
+			pattern = ""
+		}
+		result.Action = "new_person"
+		result.PersonName = name
+		result.Pattern = pattern
+	}
+
+	return result, nil
+}
+
+// SuggestCreatePerson shows a dialog suggesting the user create a person
+// because a password has been used multiple times via exact filename cache.
+// Returns a DialogResult: "new_person" or "cache" (dismiss).
+func SuggestCreatePerson(password string, hitCount int) (*DialogResult, error) {
+	handle, err := AcquireMutex()
+	if err != nil {
+		return nil, err
+	}
+	defer ReleaseMutexHandle(handle)
+
+	items := []string{"仅记住文件名", "新建人物"}
+
+	chosen, err := zenity.List(
+		fmt.Sprintf("这个密码已经用了%d次了，要建个人物吗？", hitCount),
+		items,
+		zenity.Title("智能解压 - 建议创建人物"),
+	)
+	if err != nil {
+		if err == zenity.ErrCanceled {
+			return &DialogResult{Action: "cache"}, nil
+		}
+		return nil, err
+	}
+
+	result := &DialogResult{}
+
+	switch chosen {
+	case "仅记住文件名":
+		result.Action = "cache"
+
+	case "新建人物":
+		name, err := zenity.Entry(
+			"请输入新人物名称：",
+			zenity.Title("智能解压 - 新建人物"),
+		)
+		if err != nil || name == "" {
+			result.Action = "cache"
+			return result, nil
+		}
 		pattern, err := zenity.Entry(
 			"请输入文件名匹配模式（正则表达式，可留空）：",
 			zenity.Title("智能解压 - 匹配模式"),
