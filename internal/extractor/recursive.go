@@ -10,6 +10,7 @@ import (
 // RecursiveExtractOptions controls recursive extraction behavior
 type RecursiveExtractOptions struct {
 	SevenZipPath string
+	BandizipPath string
 	MaxDepth     int
 	// MaxParallelProbes caps the number of parallel password workers.
 	// 0 means use runtime.NumCPU(). Default is 4.
@@ -78,7 +79,7 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 				opts.OnProgress("🔍 检测到非标准存档格式，尝试隐写存档检测...")
 			}
 			successPwd, err = trySteganographicExtract(
-				opts.SevenZipPath, archivePath, outputDir,
+				opts.SevenZipPath, opts.BandizipPath, archivePath, outputDir,
 				passwords, maxPar, af.Strategy, opts.OnProgress,
 			)
 			if err != nil {
@@ -109,7 +110,7 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 // trySteganographicExtract retries extraction with forced format types (-tzip, -t7z, -trar).
 // For each format, it tries all passwords. If all formats fail, it tries Bandizip as a last resort.
 func trySteganographicExtract(
-	sevenZipPath, archivePath, outputDir string,
+	sevenZipPath, bandizipConfigPath, archivePath, outputDir string,
 	passwords []string, maxWorkers int,
 	strategy ProbeStrategy,
 	onProgress func(string),
@@ -161,7 +162,7 @@ func trySteganographicExtract(
 	}
 
 	// All forced formats failed — try Bandizip as last resort
-	bandizipPath := FindBandizip()
+	bandizipPath := FindBandizip(bandizipConfigPath)
 	if bandizipPath != "" {
 		if onProgress != nil {
 			onProgress("🔄 尝试 Bandizip 解压...")

@@ -63,6 +63,7 @@ func Extract(archivePath string) error {
 
 	opts := extractor.RecursiveExtractOptions{
 		SevenZipPath:      sevenZipPath,
+		BandizipPath:      cfg.BandizipPath,
 		MaxDepth:          10,
 		MaxParallelProbes: cfg.MaxParallelProbes,
 		TryPassword: func(ap string) ([]string, error) {

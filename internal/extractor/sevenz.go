@@ -160,27 +160,42 @@ func IsNotArchiveError(output string) bool {
 		strings.Contains(lower, "no files to process")
 }
 
-// FindBandizip locates Bandizip CLI (bc.exe).
-func FindBandizip() string {
-	// Check PATH first
-	if p, err := exec.LookPath("bc.exe"); err == nil {
+// FindBandizip locates Bandizip CLI (bz.exe).
+func FindBandizip(configPath string) string {
+	// 1. Use configured path
+	if configPath != "" {
+		if _, err := os.Stat(configPath); err == nil {
+			return configPath
+		}
+	}
+
+	// 2. Check PATH
+	if p, err := exec.LookPath("bz.exe"); err == nil {
 		return p
 	}
-	if p, err := exec.LookPath("bc"); err == nil {
+	if p, err := exec.LookPath("bz"); err == nil {
 		return p
 	}
-	// Common install location
-	candidate := `C:\Program Files\Bandizip\bc.exe`
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
+
+	// 3. Common install locations
+	candidates := []string{
+		`C:\Program Files\Bandizip\bz.exe`,
+		`C:\Program Files (x86)\Bandizip\bz.exe`,
 	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+
 	return ""
 }
 
-// TryBandizipExtract attempts extraction using Bandizip CLI (bc.exe).
+// TryBandizipExtract attempts extraction using Bandizip CLI (bz.exe).
 func TryBandizipExtract(bandizipPath, archivePath, outputDir, password string) ExtractionResult {
 	args := []string{"x"}
 	args = append(args, "-o:"+outputDir)
+	args = append(args, "-y")
 	if password != "" {
 		args = append(args, "-p:"+password)
 	}
