@@ -112,10 +112,19 @@ func IdentifyPerson(filename string, personFilenames map[string][]string) []Pers
 	return results
 }
 
+// archiveExtensions lists common archive file extensions that should be stripped.
+var archiveExtensions = map[string]bool{
+	".zip": true, ".rar": true, ".7z": true, ".tar": true, ".gz": true,
+	".bz2": true, ".xz": true, ".lz": true, ".zst": true,
+	".001": true, ".002": true, ".003": true,
+}
+
 func filenameWithoutExt(name string) string {
 	base := filepath.Base(name)
+	// Only strip known archive extensions to avoid misinterpreting dots in
+	// filenames like "26.04 恶毒" as having extension ".04 恶毒".
 	ext := filepath.Ext(base)
-	if ext != "" {
+	if ext != "" && archiveExtensions[strings.ToLower(ext)] {
 		base = base[:len(base)-len(ext)]
 	}
 	return base

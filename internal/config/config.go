@@ -332,18 +332,30 @@ func SaveExactCache(filename, password string) error {
 	return SaveLearned(l)
 }
 
-// FindPersonByPassword scans all people in config.yaml and returns the person
-// name if any person has this exact password in their list. Returns "" if none.
+// FindPersonByPassword scans config.yaml people passwords AND learned.yaml
+// person_stats to find a person who has used this exact password.
+// Returns "" if no person is found.
 func FindPersonByPassword(password string) string {
 	c, err := LoadConfig()
 	if err != nil {
 		return ""
 	}
+	// Check config.yaml people passwords
 	for name, person := range c.People {
 		for _, pw := range person.Passwords {
 			if pw == password {
 				return name
 			}
+		}
+	}
+	// Check learned.yaml person_stats (passwords learned through usage)
+	l, err := LoadLearned()
+	if err != nil {
+		return ""
+	}
+	for personName, stats := range l.PersonStats {
+		if _, ok := stats[password]; ok {
+			return personName
 		}
 	}
 	return ""

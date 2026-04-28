@@ -154,10 +154,10 @@ func (p *passwordProvider) identifyPerson() (string, error) {
 		matches := ml.IdentifyPerson(archiveName, learned.PersonFilenames)
 		if len(matches) > 0 {
 			top := matches[0]
-			if top.Confidence > 0.85 {
+			if top.Confidence > 0.7 {
 				fmt.Printf("🔑 自动识别人物: %s（相似度 %.0f%%）\n", top.PersonName, top.Confidence*100)
 				return top.PersonName, nil
-			} else if top.Confidence >= 0.6 {
+			} else if top.Confidence >= 0.5 {
 				confirmed, err := ui.ConfirmPerson(archiveName, top.PersonName, top.Confidence)
 				if err == nil && confirmed {
 					return top.PersonName, nil
@@ -185,17 +185,45 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 		}
 	}
 
-	// Tier 1: Exact cache
-	if cached, ok := learned.Exact[archiveName]; ok {
-		fmt.Printf("🔑 使用缓存密码\n")
-		addPwd(cached)
+	// Tier 1: Exact cache (case-insensitive lookup for Windows compatibility)
+	archiveNameLower := strings.ToLower(archiveName)
+	for k, v := range learned.Exact {
+		if strings.ToLower(k) == archiveNameLower {
+			fmt.Printf("🔑 使用缓存密码\n")
+			addPwd(v)
+			break
+		}
 	}
 
 	// Tier 2: Person profile (if identified)
+	// Password candidates = UNION of config.yaml passwords + learned.yaml person_stats keys
 	if p.resolvedPerson != "" {
+		pwSet := make(map[string]bool)
+		var personPasswords []string
+
+		// From config.yaml
 		person := cfg.People[p.resolvedPerson]
-		if person != nil && len(person.Passwords) > 0 {
-			ranked := ml.RankPasswordsThompson(p.resolvedPerson, person.Passwords, learned)
+		if person != nil {
+			for _, pw := range person.Passwords {
+				if !pwSet[pw] {
+					pwSet[pw] = true
+					personPasswords = append(personPasswords, pw)
+				}
+			}
+		}
+
+		// From learned.yaml person_stats (passwords learned through usage)
+		if stats, ok := learned.PersonStats[p.resolvedPerson]; ok {
+			for pw := range stats {
+				if !pwSet[pw] {
+					pwSet[pw] = true
+					personPasswords = append(personPasswords, pw)
+				}
+			}
+		}
+
+		if len(personPasswords) > 0 {
+			ranked := ml.RankPasswordsThompson(p.resolvedPerson, personPasswords, learned)
 			for _, r := range ranked {
 				addPwd(r.Password)
 			}

@@ -14,21 +14,39 @@ type RankedPassword struct {
 }
 
 // RankPasswordsThompson ranks passwords for a person using Thompson Sampling.
-// It samples from Beta(alpha, beta) for each password and sorts by sample value.
+// Passwords with proven track records (alpha > 1, beta == 1, i.e. only successes)
+// are placed first deterministically (sorted by alpha descending).
+// Remaining passwords are ranked by sampling from Beta(alpha, beta).
 func RankPasswordsThompson(personName string, passwords []string, learned *config.Learned) []RankedPassword {
-	ranked := make([]RankedPassword, 0, len(passwords))
+	var proven []RankedPassword
+	var uncertain []RankedPassword
+
 	for _, pw := range passwords {
 		stats := config.GetOrCreateStats(learned, personName, pw)
-		score := sampleBeta(stats.Alpha, stats.Beta)
-		ranked = append(ranked, RankedPassword{Password: pw, Score: score})
-	}
-	// sort descending by score
-	for i := 1; i < len(ranked); i++ {
-		for j := i; j > 0 && ranked[j].Score > ranked[j-1].Score; j-- {
-			ranked[j], ranked[j-1] = ranked[j-1], ranked[j]
+		if stats.Alpha > 1 && stats.Beta == 1 {
+			// This password has only successes — deterministically first
+			proven = append(proven, RankedPassword{Password: pw, Score: stats.Alpha})
+		} else {
+			score := sampleBeta(stats.Alpha, stats.Beta)
+			uncertain = append(uncertain, RankedPassword{Password: pw, Score: score})
 		}
 	}
-	return ranked
+
+	// Sort proven passwords by alpha descending (most successful first)
+	for i := 1; i < len(proven); i++ {
+		for j := i; j > 0 && proven[j].Score > proven[j-1].Score; j-- {
+			proven[j], proven[j-1] = proven[j-1], proven[j]
+		}
+	}
+
+	// Sort uncertain passwords by Thompson sample descending
+	for i := 1; i < len(uncertain); i++ {
+		for j := i; j > 0 && uncertain[j].Score > uncertain[j-1].Score; j-- {
+			uncertain[j], uncertain[j-1] = uncertain[j-1], uncertain[j]
+		}
+	}
+
+	return append(proven, uncertain...)
 }
 
 // sampleBeta samples from Beta(alpha, beta) distribution.
