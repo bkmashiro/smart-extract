@@ -155,14 +155,9 @@ func (p *passwordProvider) identifyPerson() (string, error) {
 		matches := ml.IdentifyPerson(archiveName, learned.PersonFilenames)
 		if len(matches) > 0 {
 			top := matches[0]
-			if top.Confidence > 0.7 {
+			if top.Confidence >= 0.5 {
 				fmt.Printf("🔑 自动识别人物: %s（相似度 %.0f%%）\n", top.PersonName, top.Confidence*100)
 				return top.PersonName, nil
-			} else if top.Confidence >= 0.5 {
-				confirmed, err := ui.ConfirmPerson(archiveName, top.PersonName, top.Confidence)
-				if err == nil && confirmed {
-					return top.PersonName, nil
-				}
 			}
 		}
 	}
