@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -80,7 +81,11 @@ func LoadConfig() (*Config, error) {
 
 	var c Config
 	if err := yaml.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("parsing config.yaml: %w", err)
+		// If YAML is corrupted (e.g. concurrent write from another process),
+		// use defaults rather than failing the entire extraction.
+		fmt.Fprintf(os.Stderr, "警告：config.yaml 解析失败，使用默认配置: %v\n", err)
+		cfg = defaultConfig()
+		return cfg, nil
 	}
 	if c.People == nil {
 		c.People = make(map[string]*Person)
@@ -123,9 +128,20 @@ func LoadLearned() (*Learned, error) {
 		return nil, fmt.Errorf("reading learned.yaml: %w", err)
 	}
 
+	// If the file is empty or contains only whitespace (e.g. truncated by
+	// a concurrent write from another process), treat as empty.
+	if len(bytes.TrimSpace(data)) == 0 {
+		learned = emptyLearned()
+		return learned, nil
+	}
+
 	var l Learned
 	if err := yaml.Unmarshal(data, &l); err != nil {
-		return nil, fmt.Errorf("parsing learned.yaml: %w", err)
+		// YAML corrupted — likely another process was writing at the same
+		// time.  Use empty defaults so extraction can proceed.
+		fmt.Fprintf(os.Stderr, "警告：learned.yaml 解析失败，使用空数据: %v\n", err)
+		learned = emptyLearned()
+		return learned, nil
 	}
 	if l.Exact == nil {
 		l.Exact = make(map[string]string)
@@ -143,7 +159,8 @@ func LoadLearned() (*Learned, error) {
 	return learned, nil
 }
 
-// SaveLearned writes learned.yaml
+// SaveLearned writes learned.yaml using atomic write (temp file + rename)
+// to avoid corruption when multiple processes save concurrently.
 func SaveLearned(l *Learned) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -152,9 +169,20 @@ func SaveLearned(l *Learned) error {
 	if err != nil {
 		return fmt.Errorf("marshaling learned: %w", err)
 	}
-	if err := os.WriteFile(learnedPath, data, 0644); err != nil {
-		return fmt.Errorf("writing learned.yaml: %w", err)
+
+	// Write to a temp file first, then rename for atomicity.
+	tmpPath := learnedPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("writing learned.yaml.tmp: %w", err)
 	}
+	if err := os.Rename(tmpPath, learnedPath); err != nil {
+		// Rename can fail on some Windows configurations; fall back to
+		// direct write.
+		if err2 := os.WriteFile(learnedPath, data, 0644); err2 != nil {
+			return fmt.Errorf("writing learned.yaml: %w", err2)
+		}
+	}
+
 	learned = l
 	return nil
 }

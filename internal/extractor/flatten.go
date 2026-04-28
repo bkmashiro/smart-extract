@@ -79,22 +79,30 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
 
 	info, err := in.Stat()
 	if err != nil {
+		in.Close()
 		return err
 	}
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
 	if err != nil {
+		in.Close()
 		return err
 	}
-	defer out.Close()
 
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		in.Close()
 		return err
 	}
+
+	// Close both files BEFORE removing the source. On Windows, os.Remove
+	// fails if the file is still open (mandatory file locking).
+	out.Close()
+	in.Close()
+
 	return os.Remove(src)
 }
 

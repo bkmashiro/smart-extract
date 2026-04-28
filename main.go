@@ -21,6 +21,15 @@ func main() {
 
 	args := os.Args[1:]
 
+	// Strip surrounding quotes from arguments — some Windows shell
+	// expansions (e.g. drag-and-drop or certain "%1" substitutions) can
+	// leave literal quote characters in the argument.
+	for i, a := range args {
+		if len(a) >= 2 && a[0] == '"' && a[len(a)-1] == '"' {
+			args[i] = a[1 : len(a)-1]
+		}
+	}
+
 	if len(args) == 0 {
 		ui.AllocConsole()
 		fmt.Println("智能解压 - 使用方法:")
