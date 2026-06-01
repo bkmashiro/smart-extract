@@ -139,6 +139,15 @@ the plaintext password never appears on disk in these files. Use
 print the hex public key to paste into a matching `hashdb.sources[].public_key`
 entry.
 
+To avoid manual YAML edits, add the local contribution target back as a lookup
+source with one of these commands. They enable `hashdb.mode: lookup`, load or
+create the signing key, and upsert `hashdb.sources[]` by source name:
+
+```powershell
+smart-extract.exe --hashdb-add-sharded-source my-private-source ./hashdb/private ./hashdb/private/signing.key.json
+smart-extract.exe --hashdb-add-bundle-source my-private-bundle ./hashdb/private.bundle.json ./hashdb/private/signing.key.json
+```
+
 ### Local learning store
 
 - `learning.db` (SQLite, next to the exe) is the authoritative local

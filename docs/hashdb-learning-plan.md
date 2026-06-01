@@ -226,7 +226,6 @@ Successful top-level and nested extractions go through the same success callback
 ## Remaining Work
 
 - `ask` contribution mode UI; currently parsed but intentionally treated as off.
-- Convenience tooling to optionally add/export local contribution sources automatically.
 - Cross-process throttling/semaphore for Explorer multi-select and heavy L2 probes.
 - Optional source compression and mirror distribution (zstd/IPFS/torrent-like snapshots later).
 

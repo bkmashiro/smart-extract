@@ -37,6 +37,8 @@ func main() {
 		fmt.Println("  smart-extract.exe --uninstall    卸载右键菜单")
 		fmt.Println("  smart-extract.exe --reset-prefs  重置偏好设置")
 		fmt.Println("  smart-extract.exe --hashdb-public-key <key.json>  输出 HashDB 贡献公钥")
+		fmt.Println("  smart-extract.exe --hashdb-add-bundle-source <name> <bundle.json> <key.json>  添加本地 bundle lookup 源")
+		fmt.Println("  smart-extract.exe --hashdb-add-sharded-source <name> <base_dir> <key.json>  添加本地 sharded lookup 源")
 		fmt.Println("  smart-extract.exe <archive>      解压文件")
 		fmt.Println()
 		ui.WaitForKeypress("按 Enter 键关闭...")
@@ -76,6 +78,36 @@ func main() {
 		}
 		fmt.Println(publicKey)
 
+	case "--hashdb-add-bundle-source":
+		if len(args) < 4 {
+			fatal("用法: smart-extract.exe --hashdb-add-bundle-source <name> <bundle.json> <key.json>")
+		}
+		publicKey, err := cmd.HashDBAddLocalSource(cmd.HashDBAddLocalSourceOptions{
+			Name:    args[1],
+			Type:    "bundle",
+			Path:    args[2],
+			KeyPath: args[3],
+		})
+		if err != nil {
+			fatal("添加 HashDB bundle 源失败: %v", err)
+		}
+		fmt.Printf("✓ 已添加 HashDB bundle lookup 源，public_key: %s\n", publicKey)
+
+	case "--hashdb-add-sharded-source":
+		if len(args) < 4 {
+			fatal("用法: smart-extract.exe --hashdb-add-sharded-source <name> <base_dir> <key.json>")
+		}
+		publicKey, err := cmd.HashDBAddLocalSource(cmd.HashDBAddLocalSourceOptions{
+			Name:    args[1],
+			Type:    "sharded",
+			BaseDir: args[2],
+			KeyPath: args[3],
+		})
+		if err != nil {
+			fatal("添加 HashDB sharded 源失败: %v", err)
+		}
+		fmt.Printf("✓ 已添加 HashDB sharded lookup 源，public_key: %s\n", publicKey)
+
 	case "--help", "-h":
 		ui.AllocConsole()
 		fmt.Println("智能解压 - 使用方法:")
@@ -83,6 +115,8 @@ func main() {
 		fmt.Println("  smart-extract.exe --uninstall    卸载右键菜单")
 		fmt.Println("  smart-extract.exe --reset-prefs  重置偏好设置")
 		fmt.Println("  smart-extract.exe --hashdb-public-key <key.json>  输出 HashDB 贡献公钥")
+		fmt.Println("  smart-extract.exe --hashdb-add-bundle-source <name> <bundle.json> <key.json>  添加本地 bundle lookup 源")
+		fmt.Println("  smart-extract.exe --hashdb-add-sharded-source <name> <base_dir> <key.json>  添加本地 sharded lookup 源")
 		fmt.Println("  smart-extract.exe <archive>      解压文件")
 		fmt.Println("  smart-extract.exe --help         显示帮助")
 		fmt.Println()
