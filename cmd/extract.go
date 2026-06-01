@@ -80,6 +80,7 @@ func Extract(archivePath string) error {
 		MaxDepth:          10,
 		MaxParallelProbes: cfg.MaxParallelProbes,
 		BudgetProfile:     budget.ParseProfile(cfg.ProbeBudgetProfile),
+		OnArchiveSuccess:  makeArchiveSuccessRecorder(learningStore),
 		TryPassword: func(ap, parentPassword string) ([]string, error) {
 			// For nested archives, create a sub-provider
 			subProvider := newPasswordProvider(ap, filepath.Base(ap), cfg, learned)
@@ -102,9 +103,6 @@ func Extract(archivePath string) error {
 	}
 
 	fmt.Printf("\n✓ 解压完成 → %s\n", filepath.Base(outDir))
-	if err := recordLearningSuccess(learningStore, archivePath, successPwd, "auto_candidate"); err != nil {
-		fmt.Printf("警告：保存 SQLite 学习记录失败: %v\n", err)
-	}
 
 	// Record success
 	if person != "" {
@@ -190,6 +188,14 @@ func recordLearningSuccess(st *learningstore.Store, archivePath, password, sourc
 		ArchiveSize: size,
 	})
 	return err
+}
+
+func makeArchiveSuccessRecorder(st *learningstore.Store) func(archivePath, password string) {
+	return func(archivePath, password string) {
+		if err := recordLearningSuccess(st, archivePath, password, "auto_candidate"); err != nil {
+			fmt.Printf("警告：保存 SQLite 学习记录失败: %v\n", err)
+		}
+	}
 }
 
 // identifyPerson determines which person this file belongs to

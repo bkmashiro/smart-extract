@@ -56,3 +56,23 @@ func TestChildOptionsCarrySuccessfulParentPassword(t *testing.T) {
 		t.Fatalf("original ParentPassword mutated to %q", original.ParentPassword)
 	}
 }
+
+func TestNotifyArchiveSuccessInvokesCallback(t *testing.T) {
+	var gotPath, gotPassword string
+	opts := RecursiveExtractOptions{
+		OnArchiveSuccess: func(archivePath, password string) {
+			gotPath = archivePath
+			gotPassword = password
+		},
+	}
+
+	notifyArchiveSuccess(opts, "/tmp/nested.zip", "nested-pass")
+
+	if gotPath != "/tmp/nested.zip" || gotPassword != "nested-pass" {
+		t.Fatalf("OnArchiveSuccess = (%q, %q), want (/tmp/nested.zip, nested-pass)", gotPath, gotPassword)
+	}
+}
+
+func TestNotifyArchiveSuccessNilCallbackIsNoop(t *testing.T) {
+	notifyArchiveSuccess(RecursiveExtractOptions{}, "/tmp/archive.zip", "pass")
+}

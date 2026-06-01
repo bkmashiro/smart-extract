@@ -264,3 +264,32 @@ func TestRecordLearningSuccessSavesExactAndRawObservation(t *testing.T) {
 		t.Fatalf("SessionPasswords = %#v", sessionPasswords)
 	}
 }
+
+func TestArchiveSuccessRecorderLearnsTopLevelAndNestedArchives(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	recorder := makeArchiveSuccessRecorder(st)
+	top := filepath.Join(dir, "top.zip")
+	nested := filepath.Join(dir, "top", "nested.zip")
+	recorder(top, "top-pass")
+	recorder(nested, "nested-pass")
+
+	for archiveName, wantPassword := range map[string]string{
+		"top.zip":    "top-pass",
+		"nested.zip": "nested-pass",
+	} {
+		password, ok, err := st.LookupExact(context.Background(), archiveName)
+		if err != nil {
+			t.Fatalf("LookupExact(%s): %v", archiveName, err)
+		}
+		if !ok || password != wantPassword {
+			t.Fatalf("LookupExact(%s) = (%q, %v), want (%q, true)", archiveName, password, ok, wantPassword)
+		}
+	}
+}

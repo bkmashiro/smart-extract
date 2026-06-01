@@ -27,6 +27,10 @@ type RecursiveExtractOptions struct {
 	// It should return a list of passwords to try, in order. parentPassword is
 	// empty for top-level archives and set for nested archives.
 	TryPassword func(archivePath, parentPassword string) ([]string, error)
+	// OnArchiveSuccess is called after each archive is successfully extracted,
+	// including nested archives. The password is empty for archives that did not
+	// require one.
+	OnArchiveSuccess func(archivePath, password string)
 	// OnProgress is called with progress messages
 	OnProgress func(msg string)
 }
@@ -96,6 +100,7 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 			return "", "", err
 		}
 	}
+	notifyArchiveSuccess(opts, archivePath, successPwd)
 
 	// Flatten single-folder nesting
 	if err := FlattenSingleFolder(outputDir); err != nil {
@@ -119,6 +124,12 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 func childOptionsWithParentPassword(opts RecursiveExtractOptions, parentPassword string) RecursiveExtractOptions {
 	opts.ParentPassword = parentPassword
 	return opts
+}
+
+func notifyArchiveSuccess(opts RecursiveExtractOptions, archivePath, password string) {
+	if opts.OnArchiveSuccess != nil {
+		opts.OnArchiveSuccess(archivePath, password)
+	}
 }
 
 func budgetedMaxParallel(opts RecursiveExtractOptions, af ArchiveFormat, archiveSizeBytes int64) int {
