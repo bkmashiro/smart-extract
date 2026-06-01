@@ -156,6 +156,22 @@ smart-extract.exe --hashdb-add-sharded-source my-private-source ./hashdb/private
 smart-extract.exe --hashdb-add-bundle-source my-private-bundle ./hashdb/private.bundle.json ./hashdb/private/signing.key.json
 ```
 
+Inspect configured sources and manage the per-source HTTP cache without
+editing `config.yaml` by hand:
+
+```powershell
+smart-extract.exe --hashdb-list-sources
+smart-extract.exe --hashdb-clear-cache mirror-bundle
+smart-extract.exe --hashdb-clear-cache --all
+```
+
+`--hashdb-list-sources` prints each source's name, type, location and (for
+HTTP sources) the resolved cache directory plus whether it exists.
+`--hashdb-clear-cache <name>` removes the cache root of a single HTTP source;
+`--all` removes every HTTP source cache root (duplicates are removed once).
+Local bundle/sharded sources have no cache to clear and the named form
+rejects them with an explicit error.
+
 ### Local learning store
 
 - `learning.db` (SQLite, next to the exe) is the authoritative local

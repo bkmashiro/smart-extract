@@ -39,6 +39,9 @@ func main() {
 		fmt.Println("  smart-extract.exe --hashdb-public-key <key.json>  输出 HashDB 贡献公钥")
 		fmt.Println("  smart-extract.exe --hashdb-add-bundle-source <name> <bundle.json> <key.json>  添加本地 bundle lookup 源")
 		fmt.Println("  smart-extract.exe --hashdb-add-sharded-source <name> <base_dir> <key.json>  添加本地 sharded lookup 源")
+		fmt.Println("  smart-extract.exe --hashdb-list-sources                       列出已配置的 HashDB 源")
+		fmt.Println("  smart-extract.exe --hashdb-clear-cache <name>                 清理指定 HashDB 源的本地缓存")
+		fmt.Println("  smart-extract.exe --hashdb-clear-cache --all                  清理所有 HashDB 源的本地缓存")
 		fmt.Println("  smart-extract.exe <archive>      解压文件")
 		fmt.Println()
 		ui.WaitForKeypress("按 Enter 键关闭...")
@@ -108,6 +111,75 @@ func main() {
 		}
 		fmt.Printf("✓ 已添加 HashDB sharded lookup 源，public_key: %s\n", publicKey)
 
+	case "--hashdb-list-sources":
+		ui.AllocConsole()
+		summaries, err := cmd.HashDBListSources()
+		if err != nil {
+			fatal("列出 HashDB 源失败: %v", err)
+		}
+		if len(summaries) == 0 {
+			fmt.Println("(no HashDB sources configured)")
+		} else {
+			for i, s := range summaries {
+				if i > 0 {
+					fmt.Println()
+				}
+				disabled := ""
+				if s.Disabled {
+					disabled = " [disabled]"
+				}
+				fmt.Printf("- %s (%s)%s\n", s.Name, s.Type, disabled)
+				if s.Location != "" {
+					fmt.Printf("    location: %s\n", s.Location)
+				}
+				if s.Compression != "" {
+					fmt.Printf("    compression: %s\n", s.Compression)
+				}
+				if s.CachePath != "" {
+					exists := "missing"
+					if s.CacheExists {
+						exists = "present"
+					}
+					fmt.Printf("    cache: %s (%s)\n", s.CachePath, exists)
+				}
+			}
+		}
+		ui.WaitForKeypress("")
+
+	case "--hashdb-clear-cache":
+		if len(args) < 2 {
+			fatal("用法: smart-extract.exe --hashdb-clear-cache <name> | --all")
+		}
+		ui.AllocConsole()
+		if args[1] == "--all" {
+			removals, err := cmd.HashDBClearAllSourceCaches()
+			if err != nil {
+				fatal("清理 HashDB 缓存失败: %v", err)
+			}
+			if len(removals) == 0 {
+				fmt.Println("(no HashDB HTTP sources to clear)")
+			} else {
+				for _, r := range removals {
+					state := "已不存在"
+					if r.Existed {
+						state = "已删除"
+					}
+					fmt.Printf("✓ %s: %s (%s)\n", r.Name, r.Path, state)
+				}
+			}
+		} else {
+			path, existed, err := cmd.HashDBClearSourceCache(args[1])
+			if err != nil {
+				fatal("清理 HashDB 缓存失败: %v", err)
+			}
+			if existed {
+				fmt.Printf("✓ 已删除 %s 的缓存: %s\n", args[1], path)
+			} else {
+				fmt.Printf("✓ %s 的缓存目录不存在: %s\n", args[1], path)
+			}
+		}
+		ui.WaitForKeypress("")
+
 	case "--help", "-h":
 		ui.AllocConsole()
 		fmt.Println("智能解压 - 使用方法:")
@@ -117,6 +189,9 @@ func main() {
 		fmt.Println("  smart-extract.exe --hashdb-public-key <key.json>  输出 HashDB 贡献公钥")
 		fmt.Println("  smart-extract.exe --hashdb-add-bundle-source <name> <bundle.json> <key.json>  添加本地 bundle lookup 源")
 		fmt.Println("  smart-extract.exe --hashdb-add-sharded-source <name> <base_dir> <key.json>  添加本地 sharded lookup 源")
+		fmt.Println("  smart-extract.exe --hashdb-list-sources                       列出已配置的 HashDB 源")
+		fmt.Println("  smart-extract.exe --hashdb-clear-cache <name>                 清理指定 HashDB 源的本地缓存")
+		fmt.Println("  smart-extract.exe --hashdb-clear-cache --all                  清理所有 HashDB 源的本地缓存")
 		fmt.Println("  smart-extract.exe <archive>      解压文件")
 		fmt.Println("  smart-extract.exe --help         显示帮助")
 		fmt.Println()
