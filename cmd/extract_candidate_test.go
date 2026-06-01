@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -63,7 +64,7 @@ func TestPasswordProviderUsesLearningCandidateSourceBeforeLegacyFallbacks(t *tes
 	}
 }
 
-func TestPasswordProviderKeepsLegacyPersonPasswordsWhenLearningSourceEnabled(t *testing.T) {
+func TestPasswordProviderSkipsLegacyLearnedStatsWhenLearningSourceEnabled(t *testing.T) {
 	cfg := &config.Config{
 		People: map[string]*config.Person{
 			"alice":  {Passwords: []string{"person-pass"}},
@@ -86,10 +87,126 @@ func TestPasswordProviderKeepsLegacyPersonPasswordsWhenLearningSourceEnabled(t *
 	if err != nil {
 		t.Fatalf("getPasswords: %v", err)
 	}
-	for _, password := range []string{"person-pass", "learned-person-pass", "common-pass", "global-fallback"} {
+	for _, password := range []string{"person-pass", "common-pass", "global-fallback"} {
 		if !containsString(got, password) {
 			t.Fatalf("password candidates missing %q: %#v", password, got)
 		}
+	}
+	if containsString(got, "learned-person-pass") {
+		t.Fatalf("legacy learned.yaml person_stats should not be used when SQLite candidate source is enabled: %#v", got)
+	}
+	if _, ok := learned.PersonStats["alice"]["person-pass"]; ok {
+		t.Fatalf("SQLite candidate path should not mutate learned.yaml stats for config password")
+	}
+}
+
+func TestPasswordProviderKeepsLegacyLearnedStatsWithoutLearningSource(t *testing.T) {
+	cfg := &config.Config{
+		People: map[string]*config.Person{
+			"alice": {Passwords: []string{"person-pass"}},
+		},
+		FallbackPasswords: []string{"global-fallback"},
+	}
+	learned := &config.Learned{
+		Exact: map[string]string{},
+		PersonStats: map[string]map[string]*config.BetaStats{
+			"alice": {"learned-person-pass": {Alpha: 4, Beta: 1}},
+		},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider("/downloads/plain.zip", "plain.zip", cfg, learned)
+	provider.resolvedPerson = "alice"
+
+	got, err := provider.getPasswords("/downloads/plain.zip")
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if !containsString(got, "learned-person-pass") {
+		t.Fatalf("legacy learned.yaml person_stats should be used when SQLite candidate source is unavailable: %#v", got)
+	}
+}
+
+func TestPasswordProviderSkipsLegacyExactWhenLearningSourceEnabled(t *testing.T) {
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{"plain.zip": "legacy-exact-pass"},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider("/downloads/plain.zip", "plain.zip", cfg, learned)
+	provider.candidateSource = fakeCandidateSource{}
+
+	got, err := provider.getPasswords("/downloads/plain.zip")
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if containsString(got, "legacy-exact-pass") {
+		t.Fatalf("legacy learned.yaml exact cache should not be used when SQLite candidate source is enabled: %#v", got)
+	}
+}
+
+func TestPasswordProviderKeepsLegacyExactWithoutLearningSource(t *testing.T) {
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{"plain.zip": "legacy-exact-pass"},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider("/downloads/plain.zip", "plain.zip", cfg, learned)
+
+	got, err := provider.getPasswords("/downloads/plain.zip")
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if len(got) == 0 || got[0] != "legacy-exact-pass" {
+		t.Fatalf("legacy exact cache should remain first when SQLite is unavailable: %#v", got)
+	}
+}
+
+func TestPasswordProviderSkipsLegacyPersonFilenameIdentificationWhenLearningSourceEnabled(t *testing.T) {
+	cfg := &config.Config{People: map[string]*config.Person{}}
+	learned := &config.Learned{
+		Exact:       map[string]string{},
+		PersonStats: map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{
+			"alice": {"alice_release"},
+		},
+	}
+	provider := newPasswordProvider("/downloads/alice_release_02.zip", "alice_release_02.zip", cfg, learned)
+	provider.candidateSource = fakeCandidateSource{}
+
+	person, err := provider.identifyPerson()
+	if err != nil {
+		t.Fatalf("identifyPerson: %v", err)
+	}
+	if person != "" {
+		t.Fatalf("legacy person filename identification should be skipped when SQLite is enabled, got %q", person)
+	}
+}
+
+func TestPasswordProviderKeepsLegacyPersonFilenameIdentificationWithoutLearningSource(t *testing.T) {
+	cfg := &config.Config{People: map[string]*config.Person{}}
+	learned := &config.Learned{
+		Exact:       map[string]string{},
+		PersonStats: map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{
+			"alice": {"alice_release"},
+		},
+	}
+	provider := newPasswordProvider("/downloads/alice_release_02.zip", "alice_release_02.zip", cfg, learned)
+
+	person, err := provider.identifyPerson()
+	if err != nil {
+		t.Fatalf("identifyPerson: %v", err)
+	}
+	if person != "alice" {
+		t.Fatalf("legacy person filename identification should remain available without SQLite, got %q", person)
 	}
 }
 
@@ -381,5 +498,26 @@ func TestArchiveSuccessRecorderLearnsTopLevelAndNestedArchives(t *testing.T) {
 		if !ok || password != wantPassword {
 			t.Fatalf("LookupExact(%s) = (%q, %v), want (%q, true)", archiveName, password, ok, wantPassword)
 		}
+	}
+}
+
+func TestArchiveSuccessRecorderDoesNotCreateLegacyLearnedYAMLWhenSQLiteAvailable(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	recorder := makeArchiveSuccessRecorder(st, &config.Config{})
+	recorder(filepath.Join(dir, "sqlite-only.zip"), "sqlite-pass")
+
+	if _, err := os.Stat(filepath.Join(dir, "learned.yaml")); !os.IsNotExist(err) {
+		t.Fatalf("learned.yaml should not be created when SQLite learning is available, stat err=%v", err)
+	}
+	password, ok, err := st.LookupExact(context.Background(), "sqlite-only.zip")
+	if err != nil || !ok || password != "sqlite-pass" {
+		t.Fatalf("LookupExact=(%q,%v,%v), want sqlite-pass,true,nil", password, ok, err)
 	}
 }

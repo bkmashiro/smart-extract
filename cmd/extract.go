@@ -106,14 +106,16 @@ func Extract(archivePath string) error {
 
 	fmt.Printf("\n✓ 解压完成 → %s\n", filepath.Base(outDir))
 
-	// Record success
-	if person != "" {
+	// Record success. With SQLite available, recordLearningSuccess via the
+	// recursive success callback is the authoritative learning write path;
+	// learned.yaml is only a legacy fallback when SQLite could not open.
+	if learningStore == nil && person != "" {
 		_ = config.RecordSuccess(person, successPwd)
 		_ = config.AddPersonFilename(person, filenameBase(archiveName))
 	}
 
-	// Auto-clustering hint for unknown files
-	if person == "" && successPwd != "" {
+	// Auto-clustering hint for unknown files (legacy learned.yaml fallback only).
+	if learningStore == nil && person == "" && successPwd != "" {
 		config.ReloadAll()
 		if freshLearned, lerr := config.LoadLearned(); lerr == nil {
 			hint := ml.CheckClusteringHint(successPwd, freshLearned)
@@ -293,8 +295,9 @@ func (p *passwordProvider) identifyPerson() (string, error) {
 		}
 	}
 
-	// 2. N-gram ML identification
-	if len(learned.PersonFilenames) > 0 {
+	// 2. Legacy n-gram ML identification. When SQLite is available, it is the
+	// normal learning source; learned.yaml remains only a migration/fallback path.
+	if p.candidateSource == nil && len(learned.PersonFilenames) > 0 {
 		matches := ml.IdentifyPerson(archiveName, learned.PersonFilenames)
 		if len(matches) > 0 {
 			top := matches[0]
@@ -308,9 +311,13 @@ func (p *passwordProvider) identifyPerson() (string, error) {
 	return "", nil
 }
 
-func (p *passwordProvider) legacyStaticPasswords() []string {
+func (p *passwordProvider) staticPasswords(includeLegacyLearned bool) []string {
 	cfg := p.cfg
 	learned := p.learned
+	rankingLearned := learned
+	if !includeLegacyLearned {
+		rankingLearned = &config.Learned{PersonStats: map[string]map[string]*config.BetaStats{}}
+	}
 	var passwords []string
 	seen := make(map[string]bool)
 	addPwd := func(pw string) {
@@ -332,16 +339,18 @@ func (p *passwordProvider) legacyStaticPasswords() []string {
 				}
 			}
 		}
-		if stats, ok := learned.PersonStats[p.resolvedPerson]; ok {
-			for pw := range stats {
-				if !pwSet[pw] {
-					pwSet[pw] = true
-					personPasswords = append(personPasswords, pw)
+		if includeLegacyLearned {
+			if stats, ok := learned.PersonStats[p.resolvedPerson]; ok {
+				for pw := range stats {
+					if !pwSet[pw] {
+						pwSet[pw] = true
+						personPasswords = append(personPasswords, pw)
+					}
 				}
 			}
 		}
 		if len(personPasswords) > 0 {
-			ranked := ml.RankPasswordsThompson(p.resolvedPerson, personPasswords, learned)
+			ranked := ml.RankPasswordsThompson(p.resolvedPerson, personPasswords, rankingLearned)
 			for _, r := range ranked {
 				addPwd(r.Password)
 			}
@@ -363,7 +372,7 @@ func (p *passwordProvider) legacyStaticPasswords() []string {
 	})
 	for _, pe := range alwaysTryPeople {
 		if len(pe.person.Passwords) > 0 {
-			ranked := ml.RankPasswordsThompson(pe.name, pe.person.Passwords, learned)
+			ranked := ml.RankPasswordsThompson(pe.name, pe.person.Passwords, rankingLearned)
 			for _, r := range ranked {
 				addPwd(r.Password)
 			}
@@ -385,7 +394,7 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 			ArchiveKey:        archiveName,
 			ParentPassword:    p.parentPassword,
 			HashDBPasswords:   p.hashDBPasswords(context.Background(), archivePath),
-			StaticPasswords:   p.legacyStaticPasswords(),
+			StaticPasswords:   p.staticPasswords(false),
 			FallbackPasswords: cfg.FallbackPasswords,
 			CandidateLimit:    rec.CandidateLimit,
 		}, p.candidateSource)
@@ -606,34 +615,41 @@ func handleUnknownPassword(
 
 	// Step 1: Check if this password already belongs to a known person
 	existingPerson := config.FindPersonByPassword(password)
-	if existingPerson != "" {
-		// Auto-assign silently — password already belongs to a known person
-		fmt.Printf("✓ 密码自动匹配到人物: %s\n", existingPerson)
-		_ = config.RecordSuccess(existingPerson, password)
-		_ = config.AddPersonFilename(existingPerson, filenameBase(archiveName))
-		_ = config.SaveExactCache(archiveName, password)
-	} else {
-		// This is a genuinely new password — increment hit counter
-		hitCount, _ := config.IncrementPasswordHitCount(password)
-
-		// Step 3: Check if this password has been used 3+ times — suggest creating a person
-		if hitCount >= 3 {
-			fmt.Printf("\n💡 这个密码已经用了%d次了\n", hitCount)
-			attribution, err := ui.SuggestCreatePerson(password, hitCount)
-			if err != nil {
-				_ = config.SaveExactCache(archiveName, password)
-			} else {
-				handleNewPasswordAttribution(attribution, archiveName, password)
-			}
+	if learningStore == nil {
+		// Legacy fallback when SQLite is unavailable.
+		if existingPerson != "" {
+			// Auto-assign silently — password already belongs to a known person
+			fmt.Printf("✓ 密码自动匹配到人物: %s\n", existingPerson)
+			_ = config.RecordSuccess(existingPerson, password)
+			_ = config.AddPersonFilename(existingPerson, filenameBase(archiveName))
+			_ = config.SaveExactCache(archiveName, password)
 		} else {
-			// Step 2: Show simplified dialog — only "新建人物" / "仅记住文件名"
-			attribution, err := ui.AskNewPasswordAttribution(archiveName)
-			if err != nil {
-				_ = config.SaveExactCache(archiveName, password)
+			// This is a genuinely new password — increment hit counter
+			hitCount, _ := config.IncrementPasswordHitCount(password)
+
+			// Step 3: Check if this password has been used 3+ times — suggest creating a person
+			if hitCount >= 3 {
+				fmt.Printf("\n💡 这个密码已经用了%d次了\n", hitCount)
+				attribution, err := ui.SuggestCreatePerson(password, hitCount)
+				if err != nil {
+					_ = config.SaveExactCache(archiveName, password)
+				} else {
+					handleNewPasswordAttribution(attribution, archiveName, password)
+				}
 			} else {
-				handleNewPasswordAttribution(attribution, archiveName, password)
+				// Step 2: Show simplified dialog — only "新建人物" / "仅记住文件名"
+				attribution, err := ui.AskNewPasswordAttribution(archiveName)
+				if err != nil {
+					_ = config.SaveExactCache(archiveName, password)
+				} else {
+					handleNewPasswordAttribution(attribution, archiveName, password)
+				}
 			}
 		}
+	} else if existingPerson != "" {
+		// Keep the UI hint without mutating learned.yaml; SQLite already recorded
+		// the extraction above.
+		fmt.Printf("✓ 密码自动匹配到人物: %s\n", existingPerson)
 	}
 
 	// Flatten and recurse nested archives
