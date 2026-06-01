@@ -149,6 +149,41 @@ func (s *Store) ListObservations(ctx context.Context) ([]PasswordObservation, er
 	return out, nil
 }
 
+// SessionPasswords returns recent distinct successful passwords for a parent directory.
+func (s *Store) SessionPasswords(ctx context.Context, parentDir string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT password
+		FROM (
+			SELECT password, MAX(success_at) AS last_success_at
+			FROM password_observation
+			WHERE parent_dir = ?
+			GROUP BY password
+		)
+		ORDER BY last_success_at DESC
+		LIMIT ?
+	`, parentDir, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query session passwords: %w", err)
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var password string
+		if err := rows.Scan(&password); err != nil {
+			return nil, fmt.Errorf("scan session password: %w", err)
+		}
+		out = append(out, password)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate session passwords: %w", err)
+	}
+	return out, nil
+}
+
 // PatternRules returns pattern rules for the requested type/key.
 func (s *Store) PatternRules(ctx context.Context, patternType, patternKey string) ([]PatternRule, error) {
 	rows, err := s.db.QueryContext(ctx, `

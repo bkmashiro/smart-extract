@@ -82,6 +82,39 @@ func TestSQLiteStoreAppendsRawObservations(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreReturnsRecentSessionPasswordsByParentDir(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	defer st.Close()
+
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	observations := []PasswordObservation{
+		{ArchiveName: "old.zip", ParentDir: `/downloads`, Password: "old-pass", Source: "test", SuccessAt: base},
+		{ArchiveName: "new.zip", ParentDir: `/downloads`, Password: "new-pass", Source: "test", SuccessAt: base.Add(time.Minute)},
+		{ArchiveName: "dup.zip", ParentDir: `/downloads`, Password: "new-pass", Source: "test", SuccessAt: base.Add(2 * time.Minute)},
+		{ArchiveName: "other.zip", ParentDir: `/other`, Password: "other-pass", Source: "test", SuccessAt: base.Add(3 * time.Minute)},
+	}
+	for _, obs := range observations {
+		if _, err := st.AddObservation(ctx, obs); err != nil {
+			t.Fatalf("AddObservation: %v", err)
+		}
+	}
+
+	got, err := st.SessionPasswords(ctx, `/downloads`, 2)
+	if err != nil {
+		t.Fatalf("SessionPasswords: %v", err)
+	}
+	want := []string{"new-pass", "old-pass"}
+	if len(got) != len(want) {
+		t.Fatalf("len(SessionPasswords) = %d, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("SessionPasswords[%d] = %q, want %q; all=%#v", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestMigrateLearnedImportsLegacyYAMLData(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
