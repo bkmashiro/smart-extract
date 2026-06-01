@@ -265,6 +265,83 @@ func TestSQLiteStoreLookupExactPrefersExactCase(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreUpsertPatternRuleInsertsAndUpdates(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	defer st.Close()
+
+	rule := PatternRule{
+		PatternType: "shape",
+		PatternKey:  "rjnnnnnn.zip",
+		Password:    "shape-pass",
+		Alpha:       3,
+		Beta:        1,
+		Support:     2,
+		Confidence:  0.75,
+		Source:      "local_summary",
+	}
+	if err := st.UpsertPatternRule(ctx, rule); err != nil {
+		t.Fatalf("UpsertPatternRule insert: %v", err)
+	}
+
+	rules, err := st.PatternRules(ctx, "shape", "rjnnnnnn.zip")
+	if err != nil {
+		t.Fatalf("PatternRules after insert: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("len(rules) = %d, want 1", len(rules))
+	}
+	if rules[0].Password != "shape-pass" || rules[0].Alpha != 3 || rules[0].Beta != 1 || rules[0].Support != 2 || rules[0].Confidence != 0.75 || rules[0].Source != "local_summary" {
+		t.Fatalf("unexpected inserted rule: %+v", rules[0])
+	}
+	if rules[0].UpdatedAt.IsZero() {
+		t.Fatalf("UpdatedAt should be set after insert")
+	}
+
+	updated := rule
+	updated.Alpha = 5
+	updated.Beta = 1
+	updated.Support = 4
+	updated.Confidence = 0.83
+	updated.Source = "local_summary_updated"
+	if err := st.UpsertPatternRule(ctx, updated); err != nil {
+		t.Fatalf("UpsertPatternRule update: %v", err)
+	}
+
+	rules, err = st.PatternRules(ctx, "shape", "rjnnnnnn.zip")
+	if err != nil {
+		t.Fatalf("PatternRules after update: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("len(rules) after update = %d, want 1 (should upsert)", len(rules))
+	}
+	if rules[0].Alpha != 5 || rules[0].Beta != 1 || rules[0].Support != 4 || rules[0].Confidence != 0.83 || rules[0].Source != "local_summary_updated" {
+		t.Fatalf("unexpected updated rule: %+v", rules[0])
+	}
+}
+
+func TestSQLiteStoreUpsertPatternRuleValidatesRequiredFields(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	defer st.Close()
+
+	cases := []struct {
+		name string
+		rule PatternRule
+	}{
+		{"missing pattern_type", PatternRule{PatternKey: "rjnnnnnn.zip", Password: "p"}},
+		{"missing pattern_key", PatternRule{PatternType: "shape", Password: "p"}},
+		{"missing password", PatternRule{PatternType: "shape", PatternKey: "rjnnnnnn.zip"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := st.UpsertPatternRule(ctx, tc.rule); err == nil {
+				t.Fatalf("UpsertPatternRule(%+v) expected error", tc.rule)
+			}
+		})
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "smart-extract.db")

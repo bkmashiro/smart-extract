@@ -243,6 +243,37 @@ func (s *Store) PatternRules(ctx context.Context, patternType, patternKey string
 	return out, nil
 }
 
+// UpsertPatternRule inserts or replaces a derived pattern rule.
+func (s *Store) UpsertPatternRule(ctx context.Context, rule PatternRule) error {
+	if rule.PatternType == "" {
+		return errors.New("pattern type is required")
+	}
+	if rule.PatternKey == "" {
+		return errors.New("pattern key is required")
+	}
+	if rule.Password == "" {
+		return errors.New("password is required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO pattern_rule (
+			pattern_type, pattern_key, password, alpha, beta, support,
+			confidence, source, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(pattern_type, pattern_key, password) DO UPDATE SET
+			alpha = excluded.alpha,
+			beta = excluded.beta,
+			support = excluded.support,
+			confidence = excluded.confidence,
+			source = excluded.source,
+			updated_at = excluded.updated_at
+	`, rule.PatternType, rule.PatternKey, rule.Password, rule.Alpha, rule.Beta,
+		rule.Support, rule.Confidence, rule.Source, nowString())
+	if err != nil {
+		return fmt.Errorf("upsert pattern rule: %w", err)
+	}
+	return nil
+}
+
 // TopPasswords returns password dictionary entries by local use count.
 func (s *Store) TopPasswords(ctx context.Context, limit int) ([]PasswordStat, error) {
 	if limit <= 0 {

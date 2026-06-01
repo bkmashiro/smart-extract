@@ -13,6 +13,7 @@ import (
 	"github.com/bkmashiro/smart-extract/internal/candidates"
 	"github.com/bkmashiro/smart-extract/internal/config"
 	"github.com/bkmashiro/smart-extract/internal/extractor"
+	"github.com/bkmashiro/smart-extract/internal/learning"
 	"github.com/bkmashiro/smart-extract/internal/ml"
 	learningstore "github.com/bkmashiro/smart-extract/internal/store"
 	"github.com/bkmashiro/smart-extract/internal/ui"
@@ -179,7 +180,8 @@ func recordLearningSuccess(st *learningstore.Store, archivePath, password, sourc
 	if info, err := os.Stat(archivePath); err == nil {
 		size = info.Size()
 	}
-	_, err := st.AddObservation(context.Background(), learningstore.PasswordObservation{
+	ctx := context.Background()
+	_, err := st.AddObservation(ctx, learningstore.PasswordObservation{
 		ArchivePath: archivePath,
 		ArchiveName: archiveName,
 		ParentDir:   filepath.Dir(archivePath),
@@ -187,7 +189,10 @@ func recordLearningSuccess(st *learningstore.Store, archivePath, password, sourc
 		Source:      source,
 		ArchiveSize: size,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	return learning.SummarizeShapePatterns(ctx, st, 2)
 }
 
 func makeArchiveSuccessRecorder(st *learningstore.Store) func(archivePath, password string) {

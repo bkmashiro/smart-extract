@@ -265,6 +265,51 @@ func TestRecordLearningSuccessSavesExactAndRawObservation(t *testing.T) {
 	}
 }
 
+func TestRecordLearningSuccessDerivesShapePatternsAfterRepeatedSuccess(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	for _, name := range []string{"RJ123456.zip", "RJ654321.zip"} {
+		archivePath := filepath.Join(dir, name)
+		if err := recordLearningSuccess(st, archivePath, "shape-derived-pass", "auto_candidate"); err != nil {
+			t.Fatalf("recordLearningSuccess(%s): %v", name, err)
+		}
+	}
+
+	rules, err := st.PatternRules(context.Background(), "shape", "rjnnnnnn.zip")
+	if err != nil {
+		t.Fatalf("PatternRules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("len(rules) = %d, want 1; rules=%+v", len(rules), rules)
+	}
+	if rules[0].Password != "shape-derived-pass" || rules[0].Support != 2 {
+		t.Fatalf("unexpected rule: %+v", rules[0])
+	}
+
+	thirdPath := filepath.Join(dir, "RJ999999.zip")
+	provider := newPasswordProvider(thirdPath, "RJ999999.zip", &config.Config{
+		People: map[string]*config.Person{},
+	}, &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	})
+	provider.candidateSource = st
+	got, err := provider.getPasswords(thirdPath)
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if !containsString(got, "shape-derived-pass") {
+		t.Fatalf("expected candidates to contain shape-derived-pass; got %#v", got)
+	}
+}
+
 func TestArchiveSuccessRecorderLearnsTopLevelAndNestedArchives(t *testing.T) {
 	dir := t.TempDir()
 	config.Init(dir)
