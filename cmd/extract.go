@@ -166,15 +166,16 @@ func ExtractWithOptions(archivePath string, options ExtractOptions) error {
 
 // passwordProvider builds ordered password lists for a given archive
 type passwordProvider struct {
-	archivePath     string
-	archiveName     string
-	cfg             *config.Config
-	learned         *config.Learned
-	candidateSource candidates.Source
-	resolvedPerson  string
-	sevenZipPath    string
-	parentPassword  string
-	debug           *debugLogger
+	archivePath      string
+	archiveName      string
+	cfg              *config.Config
+	learned          *config.Learned
+	candidateSource  candidates.Source
+	resolvedPerson   string
+	sevenZipPath     string
+	parentPassword   string
+	debug            *debugLogger
+	suppressWarnings bool
 }
 
 func newPasswordProvider(archivePath, archiveName string, cfg *config.Config, learned *config.Learned) *passwordProvider {
@@ -594,7 +595,9 @@ func (p *passwordProvider) hashDBPasswords(ctx context.Context, archivePath stri
 		active++
 		passwords, err := p.lookupHashDBSource(ctx, src, archivePath)
 		if err != nil {
-			fmt.Printf("警告：HashDB 来源 %s 查询失败: %v\n", label, err)
+			if !p.suppressWarnings {
+				fmt.Printf("警告：HashDB 来源 %s 查询失败: %s\n", sanitizeDebugLine(label), sanitizeDebugLine(err.Error()))
+			}
 			p.debug.Logf("hashdb source error name=%s err=%v", label, err)
 			continue
 		}

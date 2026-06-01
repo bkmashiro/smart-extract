@@ -22,6 +22,8 @@ type runDeps struct {
 	extract         func(path string, opts cmd.ExtractOptions) error
 	explain         func(path string, w io.Writer) error
 	doctor          func(w io.Writer) error
+	explainJSON     func(path string, w io.Writer) error
+	doctorJSON      func(w io.Writer) error
 }
 
 func main() {
@@ -55,6 +57,12 @@ func run(args []string, deps runDeps) int {
 	}
 	if deps.doctor == nil {
 		deps.doctor = cmd.Doctor
+	}
+	if deps.explainJSON == nil {
+		deps.explainJSON = cmd.ExplainArchiveJSON
+	}
+	if deps.doctorJSON == nil {
+		deps.doctorJSON = cmd.DoctorJSON
 	}
 	// Strip surrounding quotes from arguments — some Windows shell
 	// expansions (e.g. drag-and-drop or certain "%1" substitutions) can
@@ -255,6 +263,19 @@ func run(args []string, deps runDeps) int {
 			return reportFatal(deps, "生成诊断信息失败: %v", err)
 		}
 
+	case "--explain-json":
+		if len(args) < 2 {
+			return reportFatal(deps, "用法: smart-extract.exe --explain-json <archive>")
+		}
+		if err := deps.explainJSON(args[1], deps.stdout); err != nil {
+			return reportFatal(deps, "生成诊断信息失败: %v", err)
+		}
+
+	case "--doctor-json":
+		if err := deps.doctorJSON(deps.stdout); err != nil {
+			return reportFatal(deps, "诊断失败: %v", err)
+		}
+
 	default:
 		if code := extractArchives(args, deps, ""); code != 0 {
 			return code
@@ -311,8 +332,10 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache <name>                 清理指定 HashDB 源的本地缓存")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache --all                  清理所有 HashDB 源的本地缓存")
 	fmt.Fprintln(w, "  smart-extract.exe --doctor                                   检查配置、7-Zip、学习库与 HashDB 源")
+	fmt.Fprintln(w, "  smart-extract.exe --doctor-json                              以 JSON 输出 doctor 诊断结果（适合 bug report）")
 	fmt.Fprintln(w, "  smart-extract.exe --debug-log <log.txt> <archive> [archive...] 输出调试日志（不记录明文密码）")
 	fmt.Fprintln(w, "  smart-extract.exe --explain <archive>                         仅诊断候选来源/HashDB，不解压")
+	fmt.Fprintln(w, "  smart-extract.exe --explain-json <archive>                    以 JSON 输出 explain 诊断结果")
 	fmt.Fprintln(w, "  smart-extract.exe <archive>      解压文件")
 	fmt.Fprintln(w)
 }

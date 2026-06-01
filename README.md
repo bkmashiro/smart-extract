@@ -51,8 +51,10 @@ smart-extract.exe --install     Install right-click menu
 smart-extract.exe --uninstall   Remove right-click menu
 smart-extract.exe --hashdb-public-key ./hashdb/private/signing.key.json
 smart-extract.exe --doctor
+smart-extract.exe --doctor-json
 smart-extract.exe --debug-log .\smart-extract-debug.log <archive>
 smart-extract.exe --explain <archive>
+smart-extract.exe --explain-json <archive>
 smart-extract.exe <archive>     Extract an archive (called by Explorer)
 ```
 

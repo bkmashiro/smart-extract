@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -31,6 +32,12 @@ func newTestDeps() (runDeps, *bytes.Buffer, *bytes.Buffer) {
 			return nil
 		},
 		doctor: func(w io.Writer) error {
+			return nil
+		},
+		explainJSON: func(path string, w io.Writer) error {
+			return nil
+		},
+		doctorJSON: func(w io.Writer) error {
 			return nil
 		},
 	}
@@ -362,6 +369,102 @@ func TestRunDoctorHookErrorReturnsNonZero(t *testing.T) {
 		t.Fatalf("expected non-zero exit")
 	}
 	if !strings.Contains(stderr.String(), "doctor boom") {
+		t.Fatalf("stderr missing hook error: %q", stderr.String())
+	}
+}
+
+func TestRunExplainJSONDispatchesToExplainJSONHook(t *testing.T) {
+	setupTempConfig(t)
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "password=secret.zip")
+	if err := os.WriteFile(archivePath, []byte("fake"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	deps, stdout, stderr := newTestDeps()
+	var gotPath string
+	textCalled := false
+	deps.explain = func(path string, w io.Writer) error {
+		textCalled = true
+		return nil
+	}
+	deps.explainJSON = func(path string, w io.Writer) error {
+		gotPath = path
+		_, _ = fmt.Fprint(w, `{"command":"explain"}`)
+		return nil
+	}
+
+	if code := run([]string{"--explain-json", archivePath}, deps); code != 0 {
+		t.Fatalf("exit code=%d stderr=%s", code, stderr.String())
+	}
+	if textCalled {
+		t.Fatalf("--explain-json must not invoke the text explain hook")
+	}
+	if gotPath != archivePath {
+		t.Fatalf("explainJSON path=%q, want %q", gotPath, archivePath)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(stdout.String()), &got); err != nil {
+		t.Fatalf("stdout not valid JSON: %v; out=%q", err, stdout.String())
+	}
+	if got["command"] != "explain" {
+		t.Fatalf("expected command=explain in JSON output, got %v", got)
+	}
+}
+
+func TestRunExplainJSONMissingArgReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+	deps, _, stderr := newTestDeps()
+	if code := run([]string{"--explain-json"}, deps); code == 0 {
+		t.Fatalf("expected non-zero exit")
+	}
+	if !strings.Contains(stderr.String(), "--explain-json") {
+		t.Fatalf("expected usage hint in stderr, got %q", stderr.String())
+	}
+}
+
+func TestRunDoctorJSONDispatchesToDoctorJSONHook(t *testing.T) {
+	setupTempConfig(t)
+	deps, stdout, stderr := newTestDeps()
+	textCalled := false
+	jsonCalled := false
+	deps.doctor = func(w io.Writer) error {
+		textCalled = true
+		return nil
+	}
+	deps.doctorJSON = func(w io.Writer) error {
+		jsonCalled = true
+		_, _ = fmt.Fprint(w, `{"command":"doctor"}`)
+		return nil
+	}
+	if code := run([]string{"--doctor-json"}, deps); code != 0 {
+		t.Fatalf("exit code=%d stderr=%s", code, stderr.String())
+	}
+	if textCalled {
+		t.Fatalf("--doctor-json must not invoke the text doctor hook")
+	}
+	if !jsonCalled {
+		t.Fatalf("doctorJSON hook was not called")
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(stdout.String()), &got); err != nil {
+		t.Fatalf("stdout not valid JSON: %v; out=%q", err, stdout.String())
+	}
+	if got["command"] != "doctor" {
+		t.Fatalf("expected command=doctor in JSON output, got %v", got)
+	}
+}
+
+func TestRunDoctorJSONHookErrorReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+	deps, _, stderr := newTestDeps()
+	deps.doctorJSON = func(w io.Writer) error {
+		return fmt.Errorf("doctor-json boom")
+	}
+	if code := run([]string{"--doctor-json"}, deps); code == 0 {
+		t.Fatalf("expected non-zero exit")
+	}
+	if !strings.Contains(stderr.String(), "doctor-json boom") {
 		t.Fatalf("stderr missing hook error: %q", stderr.String())
 	}
 }

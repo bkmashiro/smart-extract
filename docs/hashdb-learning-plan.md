@@ -230,7 +230,7 @@ Source and cache management is implemented: `--hashdb-list-sources` prints each 
 
 Debug observability is implemented via `--debug-log <log.txt> <archive> [archive...]`. The log records extraction progress, candidate source counts, budget profile/limits, HashDB source skip/lookup/error summaries, and success/failure markers while avoiding plaintext password values and redacting filename password hints such as `password=...`, `pwd-...`, and `密码...`.
 
-Dry-run diagnostics are implemented via `--doctor` and `--explain <archive>`. `--doctor` reports config, 7-Zip, learning store, and HashDB source/cache status without downloading HTTP mirrors. `--explain` reports budget profile, candidate limit, total candidate count, candidate counts by source, and configured HashDB source status without extracting, prompting, deleting archives, writing learning observations, or appending HashDB contributions. Neither command prints raw candidate password values.
+Dry-run diagnostics are implemented via `--doctor` and `--explain <archive>`. `--doctor` reports config, 7-Zip, learning store, and HashDB source/cache status without downloading HTTP mirrors. `--explain` reports budget profile, candidate limit, total candidate count, candidate counts by source, and configured HashDB source status without extracting, prompting, deleting archives, writing learning observations, or appending HashDB contributions. Neither command prints raw candidate password values. Machine-readable variants `--doctor-json` and `--explain-json <archive>` emit the same data as deterministic indented JSON for bug reports and automation while preserving the same safety contract and password redaction.
 
 ## Remaining Work
 
