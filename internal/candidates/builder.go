@@ -13,6 +13,7 @@ import (
 const (
 	SourceParent     = "parent"
 	SourceExact      = "exact"
+	SourceHashDB     = "hashdb"
 	SourceFilename   = "filename"
 	SourceSession    = "session"
 	SourcePattern    = "pattern"
@@ -34,6 +35,7 @@ type Request struct {
 	ArchivePath       string
 	ArchiveKey        string
 	ParentPassword    string
+	HashDBPasswords   []string
 	StaticPasswords   []string
 	FallbackPasswords []string
 	DictionaryLimit   int
@@ -71,6 +73,10 @@ func Build(ctx context.Context, req Request, source Source) ([]Candidate, error)
 		if ok {
 			builder.add(Candidate{Password: password, Source: SourceExact, Score: 1500})
 		}
+	}
+
+	for _, password := range req.HashDBPasswords {
+		builder.add(Candidate{Password: password, Source: SourceHashDB, Score: 1200})
 	}
 
 	for _, password := range ExtractFilenamePasswords(filepath.Base(req.ArchivePath)) {

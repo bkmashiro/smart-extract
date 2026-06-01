@@ -18,6 +18,26 @@ type Config struct {
 	ProbeBudgetProfile string             `yaml:"probe_budget_profile,omitempty"`
 	People             map[string]*Person `yaml:"people"`
 	FallbackPasswords  []string           `yaml:"fallback_passwords"`
+	HashDB             HashDBConfig       `yaml:"hashdb,omitempty"`
+}
+
+// HashDBConfig configures opt-in local signed HashDB bundle lookups.
+// Defaults keep the feature off and perform no network access.
+type HashDBConfig struct {
+	// Mode is "off" (default) or "lookup".
+	Mode string `yaml:"mode,omitempty"`
+	// Sources is the ordered list of local signed-bundle files to consult.
+	Sources []HashDBSource `yaml:"sources,omitempty"`
+}
+
+// HashDBSource describes a single local signed bundle file to consult.
+type HashDBSource struct {
+	Name      string `yaml:"name,omitempty"`
+	Path      string `yaml:"path"`
+	PublicKey string `yaml:"public_key,omitempty"`
+	// Disabled, when true, suppresses lookups against this source.
+	// Defaults to false so a configured source is enabled by default.
+	Disabled bool `yaml:"disabled,omitempty"`
 }
 
 // Person represents a person's profile in config.yaml

@@ -13,6 +13,7 @@ import (
 	"github.com/bkmashiro/smart-extract/internal/candidates"
 	"github.com/bkmashiro/smart-extract/internal/config"
 	"github.com/bkmashiro/smart-extract/internal/extractor"
+	"github.com/bkmashiro/smart-extract/internal/hashdb"
 	"github.com/bkmashiro/smart-extract/internal/learning"
 	"github.com/bkmashiro/smart-extract/internal/ml"
 	learningstore "github.com/bkmashiro/smart-extract/internal/store"
@@ -317,6 +318,7 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 			ArchivePath:       archivePath,
 			ArchiveKey:        archiveName,
 			ParentPassword:    p.parentPassword,
+			HashDBPasswords:   p.hashDBPasswords(context.Background(), archivePath),
 			StaticPasswords:   p.legacyStaticPasswords(),
 			FallbackPasswords: cfg.FallbackPasswords,
 			CandidateLimit:    rec.CandidateLimit,
@@ -349,6 +351,12 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 			addPwd(v)
 			break
 		}
+	}
+
+	// Tier 1b: optional local HashDB signed bundle candidates. These are
+	// archive-exact external candidates, but local exact cache remains first.
+	for _, pw := range p.hashDBPasswords(context.Background(), archivePath) {
+		addPwd(pw)
 	}
 
 	// Tier 2: Person profile (if identified)
@@ -418,6 +426,41 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 	addPwd("")
 
 	return passwords, nil
+}
+
+func (p *passwordProvider) hashDBPasswords(ctx context.Context, archivePath string) []string {
+	if p == nil || p.cfg == nil || !strings.EqualFold(p.cfg.HashDB.Mode, "lookup") {
+		return nil
+	}
+
+	var out []string
+	seen := make(map[string]struct{})
+	for _, src := range p.cfg.HashDB.Sources {
+		if src.Disabled {
+			continue
+		}
+		passwords, err := hashdb.LookupFileSource(ctx, hashdb.FileSource{
+			Name:      src.Name,
+			Path:      src.Path,
+			PublicKey: src.PublicKey,
+		}, archivePath)
+		if err != nil {
+			label := src.Name
+			if label == "" {
+				label = src.Path
+			}
+			fmt.Printf("警告：HashDB 来源 %s 查询失败: %v\n", label, err)
+			continue
+		}
+		for _, password := range passwords {
+			if _, ok := seen[password]; ok {
+				continue
+			}
+			seen[password] = struct{}{}
+			out = append(out, password)
+		}
+	}
+	return out
 }
 
 func (p *passwordProvider) budgetRecommendation(archivePath string) budget.Recommendation {
