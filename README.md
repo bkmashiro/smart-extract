@@ -174,6 +174,8 @@ smart-extract.exe --hashdb-disable-source mirror-bundle
 smart-extract.exe --hashdb-enable-source mirror-bundle
 smart-extract.exe --hashdb-clear-cache mirror-bundle
 smart-extract.exe --hashdb-clear-cache --all
+smart-extract.exe --hashdb-verify-source mirror-bundle
+smart-extract.exe --hashdb-verify-source --all
 ```
 
 `--hashdb-list-sources` prints each source's name, type, location and (for
@@ -184,6 +186,13 @@ configured source's `disabled` flag without changing ordering or other fields.
 `--all` removes every HTTP source cache root (duplicates are removed once).
 Local bundle/sharded sources have no cache to clear and the named form
 rejects them with an explicit error.
+`--hashdb-verify-source <name>` performs an offline structural and signature
+check against one configured source; `--all` checks every source in order.
+Local bundle/sharded sources are read from disk and signed-bundle/manifest
+integrity is verified; HTTP sources verify only the existing cached bundle
+or manifest+shards without downloading, reporting `missing_cache` when no
+cache is present. The named form exits non-zero on any failure; `--all`
+exits non-zero if any source reports `error` or `missing_cache`.
 
 ### Debug logs
 

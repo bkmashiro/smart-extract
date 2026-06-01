@@ -212,6 +212,39 @@ func run(args []string, deps runDeps) int {
 		}
 		deps.waitForKeypress("")
 
+	case "--hashdb-verify-source":
+		if len(args) < 2 {
+			return reportFatal(deps, "用法: smart-extract.exe --hashdb-verify-source <name> | --all")
+		}
+		deps.allocConsole()
+		if args[1] == "--all" {
+			results, err := cmd.HashDBVerifyAllSources()
+			if err != nil {
+				return reportFatal(deps, "校验 HashDB 源失败: %v", err)
+			}
+			if len(results) == 0 {
+				fmt.Fprintln(deps.stdout, "(no HashDB sources configured)")
+			}
+			exit := 0
+			for _, r := range results {
+				fmt.Fprintln(deps.stdout, cmd.FormatHashDBVerifyResult(r))
+				if r.Status != "ok" {
+					exit = 1
+				}
+			}
+			deps.waitForKeypress("")
+			return exit
+		}
+		result, err := cmd.HashDBVerifySource(args[1])
+		if err != nil {
+			return reportFatal(deps, "校验 HashDB 源失败: %v", err)
+		}
+		fmt.Fprintln(deps.stdout, cmd.FormatHashDBVerifyResult(result))
+		deps.waitForKeypress("")
+		if result.Status != "ok" {
+			return 1
+		}
+
 	case "--hashdb-disable-source":
 		if len(args) < 2 {
 			return reportFatal(deps, "用法: smart-extract.exe --hashdb-disable-source <name>")
@@ -331,6 +364,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-enable-source <name>               启用指定 HashDB 源")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache <name>                 清理指定 HashDB 源的本地缓存")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache --all                  清理所有 HashDB 源的本地缓存")
+	fmt.Fprintln(w, "  smart-extract.exe --hashdb-verify-source <name>               离线校验指定 HashDB 源的签名与结构")
+	fmt.Fprintln(w, "  smart-extract.exe --hashdb-verify-source --all                离线校验所有 HashDB 源")
 	fmt.Fprintln(w, "  smart-extract.exe --doctor                                   检查配置、7-Zip、学习库与 HashDB 源")
 	fmt.Fprintln(w, "  smart-extract.exe --doctor-json                              以 JSON 输出 doctor 诊断结果（适合 bug report）")
 	fmt.Fprintln(w, "  smart-extract.exe --debug-log <log.txt> <archive> [archive...] 输出调试日志（不记录明文密码）")

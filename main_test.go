@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/bkmashiro/smart-extract/cmd"
 	"github.com/bkmashiro/smart-extract/internal/config"
+	"github.com/bkmashiro/smart-extract/internal/hashdb"
 )
 
 // newTestDeps returns runDeps with captured stdout/stderr and no-op
@@ -492,6 +495,131 @@ func TestRunHashDBEnableSourceMissingNameReturnsNonZero(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "does-not-exist") {
 		t.Fatalf("expected source name in stderr, got: %q", stderr.String())
+	}
+}
+
+func writeMainSignedBundle(t *testing.T, dir, archivePath string, passwords []string) (string, string) {
+	t.Helper()
+	f, err := os.Open(archivePath)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	digest := hashdb.ArchiveHash(f)
+	f.Close()
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519 keygen: %v", err)
+	}
+	var recs []hashdb.Record
+	for _, pw := range passwords {
+		r, err := hashdb.BuildRecord(digest, pw, "test")
+		if err != nil {
+			t.Fatalf("BuildRecord: %v", err)
+		}
+		recs = append(recs, r)
+	}
+	signed, err := hashdb.SignBundle(hashdb.Bundle{Source: "test", Records: recs}, priv)
+	if err != nil {
+		t.Fatalf("SignBundle: %v", err)
+	}
+	data, err := hashdb.MarshalSignedBundle(signed)
+	if err != nil {
+		t.Fatalf("MarshalSignedBundle: %v", err)
+	}
+	p := filepath.Join(dir, "main-bundle.json")
+	if err := os.WriteFile(p, data, 0o644); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+	return p, hex.EncodeToString(pub)
+}
+
+func TestRunHashDBVerifySourceNamedLocalBundle(t *testing.T) {
+	dir := setupTempConfig(t)
+	archive := filepath.Join(dir, "archive.bin")
+	if err := os.WriteFile(archive, []byte("main-verify"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	bundlePath, pubHex := writeMainSignedBundle(t, dir, archive, []string{"p1", "p2"})
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.HashDB.Mode = "lookup"
+	cfg.HashDB.Sources = []config.HashDBSource{
+		{Name: "local", Type: "bundle", Path: bundlePath, PublicKey: pubHex},
+	}
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	config.ReloadAll()
+
+	deps, stdout, stderr := newTestDeps()
+	code := run([]string{"--hashdb-verify-source", "local"}, deps)
+	if code != 0 {
+		t.Fatalf("exit=%d stderr=%s stdout=%s", code, stderr.String(), stdout.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "local") {
+		t.Fatalf("stdout missing source name: %s", out)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("stdout missing ok status: %s", out)
+	}
+	if !strings.Contains(out, "records=2") {
+		t.Fatalf("stdout missing records count: %s", out)
+	}
+}
+
+func TestRunHashDBVerifySourceAllReturnsNonZeroWhenMissingCache(t *testing.T) {
+	dir := setupTempConfig(t)
+	cacheDir := filepath.Join(dir, "hashdb-cache")
+	archive := filepath.Join(dir, "archive.bin")
+	if err := os.WriteFile(archive, []byte("main-verify-all"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	bundlePath, pubHex := writeMainSignedBundle(t, dir, archive, []string{"p"})
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.HashDB.Mode = "lookup"
+	cfg.HashDB.Sources = []config.HashDBSource{
+		{Name: "local", Type: "bundle", Path: bundlePath, PublicKey: pubHex},
+		{Name: "mirror", Type: "bundle", URL: "https://example.invalid/x.bundle.json", CacheDir: cacheDir},
+	}
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	config.ReloadAll()
+
+	deps, stdout, stderr := newTestDeps()
+	code := run([]string{"--hashdb-verify-source", "--all"}, deps)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit, stdout=%s stderr=%s", stdout.String(), stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "local") || !strings.Contains(out, "mirror") {
+		t.Fatalf("expected both names in stdout: %s", out)
+	}
+	if !strings.Contains(out, "missing_cache") {
+		t.Fatalf("expected missing_cache in stdout: %s", out)
+	}
+	if !strings.Contains(out, "ok") {
+		t.Fatalf("expected ok marker for local source in stdout: %s", out)
+	}
+}
+
+func TestRunHashDBVerifySourceMissingArgReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+	deps, _, stderr := newTestDeps()
+	if code := run([]string{"--hashdb-verify-source"}, deps); code == 0 {
+		t.Fatalf("expected non-zero exit")
+	}
+	if !strings.Contains(stderr.String(), "--hashdb-verify-source") {
+		t.Fatalf("expected usage hint in stderr, got: %q", stderr.String())
 	}
 }
 

@@ -226,7 +226,7 @@ Static HTTP mirror sources may serve gzip-compressed bundles or shards. Bundle s
 
 ---
 
-Source and cache management is implemented: `--hashdb-list-sources` prints each configured source with its resolved HTTP cache directory and existence, `--hashdb-disable-source <name>` / `--hashdb-enable-source <name>` flip the source's `disabled` flag while preserving source order and fields, and `--hashdb-clear-cache <name>` / `--hashdb-clear-cache --all` removes HTTP source cache roots (with dedup) without touching local-only bundle/sharded sources.
+Source and cache management is implemented: `--hashdb-list-sources` prints each configured source with its resolved HTTP cache directory and existence, `--hashdb-disable-source <name>` / `--hashdb-enable-source <name>` flip the source's `disabled` flag while preserving source order and fields, and `--hashdb-clear-cache <name>` / `--hashdb-clear-cache --all` removes HTTP source cache roots (with dedup) without touching local-only bundle/sharded sources. Offline source verification is implemented via `--hashdb-verify-source <name>` and `--hashdb-verify-source --all`: signature/structure/public-key-pin checks for local bundle/sharded sources, plus cache-only verification for HTTP sources (no downloads, no cache mutation; missing caches report `missing_cache`).
 
 Debug observability is implemented via `--debug-log <log.txt> <archive> [archive...]`. The log records extraction progress, candidate source counts, budget profile/limits, HashDB source skip/lookup/error summaries, and success/failure markers while avoiding plaintext password values and redacting filename password hints such as `password=...`, `pwd-...`, and `密码...`.
 
