@@ -28,6 +28,32 @@ type HashDBConfig struct {
 	Mode string `yaml:"mode,omitempty"`
 	// Sources is the ordered list of local signed-bundle files to consult.
 	Sources []HashDBSource `yaml:"sources,omitempty"`
+	// Contribute selects local contribution behavior on successful extraction.
+	// "" / "off" (default) disables contribution. "auto" appends silently.
+	// "ask" is reserved for a later UI slice and is treated as off here.
+	Contribute string `yaml:"contribute,omitempty"`
+	// Contribution describes the local target to append to when Contribute
+	// is enabled. No network access is performed.
+	Contribution HashDBContribution `yaml:"contribution,omitempty"`
+}
+
+// HashDBContribution describes a single local sink for archive/password
+// contributions. Either a single signed bundle file (Type "bundle") or a
+// sharded directory (Type "sharded").
+type HashDBContribution struct {
+	// Type is "bundle" (default when Path is set) or "sharded".
+	Type string `yaml:"type,omitempty"`
+	// Path is the bundle file path for Type "bundle".
+	Path string `yaml:"path,omitempty"`
+	// BaseDir is the sharded source root for Type "sharded".
+	BaseDir string `yaml:"base_dir,omitempty"`
+	// KeyPath is the Ed25519 signing key json (created 0600 if missing).
+	KeyPath string `yaml:"key_path,omitempty"`
+	// Source is the source label embedded in the produced records.
+	Source string `yaml:"source,omitempty"`
+	// ShardPrefixLength is the manifest prefix length used when creating a
+	// new sharded source. Ignored once a manifest exists.
+	ShardPrefixLength int `yaml:"shard_prefix_length,omitempty"`
 }
 
 // HashDBSource describes a single local HashDB source to consult.

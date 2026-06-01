@@ -364,7 +364,7 @@ func TestArchiveSuccessRecorderLearnsTopLevelAndNestedArchives(t *testing.T) {
 	}
 	defer st.Close()
 
-	recorder := makeArchiveSuccessRecorder(st)
+	recorder := makeArchiveSuccessRecorder(st, &config.Config{})
 	top := filepath.Join(dir, "top.zip")
 	nested := filepath.Join(dir, "top", "nested.zip")
 	recorder(top, "top-pass")

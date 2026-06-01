@@ -84,6 +84,112 @@ func TestLoadConfigHashDBLookupModeWithSource(t *testing.T) {
 	}
 }
 
+func TestLoadConfigHashDBContributionDefaultsToOff(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte("fallback_passwords:\n  - \"abc\"\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if c.HashDB.Contribute != "" && c.HashDB.Contribute != "off" {
+		t.Fatalf("HashDB.Contribute = %q, want empty or off", c.HashDB.Contribute)
+	}
+	if c.HashDB.Contribution.Type != "" {
+		t.Fatalf("HashDB.Contribution.Type = %q, want empty", c.HashDB.Contribution.Type)
+	}
+	if c.HashDB.Contribution.Path != "" {
+		t.Fatalf("HashDB.Contribution.Path = %q, want empty", c.HashDB.Contribution.Path)
+	}
+	if c.HashDB.Contribution.BaseDir != "" {
+		t.Fatalf("HashDB.Contribution.BaseDir = %q, want empty", c.HashDB.Contribution.BaseDir)
+	}
+	if c.HashDB.Contribution.KeyPath != "" {
+		t.Fatalf("HashDB.Contribution.KeyPath = %q, want empty", c.HashDB.Contribution.KeyPath)
+	}
+	if c.HashDB.Contribution.ShardPrefixLength != 0 {
+		t.Fatalf("HashDB.Contribution.ShardPrefixLength = %d, want 0", c.HashDB.Contribution.ShardPrefixLength)
+	}
+}
+
+func TestLoadConfigHashDBContributionAutoBundleParses(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte(`hashdb:
+  mode: lookup
+  contribute: auto
+  contribution:
+    type: bundle
+    path: /tmp/local-bundle.json
+    key_path: /tmp/local-key.json
+    source: local-private
+`)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if c.HashDB.Contribute != "auto" {
+		t.Fatalf("HashDB.Contribute = %q, want auto", c.HashDB.Contribute)
+	}
+	if c.HashDB.Contribution.Type != "bundle" {
+		t.Fatalf("Contribution.Type = %q", c.HashDB.Contribution.Type)
+	}
+	if c.HashDB.Contribution.Path != "/tmp/local-bundle.json" {
+		t.Fatalf("Contribution.Path = %q", c.HashDB.Contribution.Path)
+	}
+	if c.HashDB.Contribution.KeyPath != "/tmp/local-key.json" {
+		t.Fatalf("Contribution.KeyPath = %q", c.HashDB.Contribution.KeyPath)
+	}
+	if c.HashDB.Contribution.Source != "local-private" {
+		t.Fatalf("Contribution.Source = %q", c.HashDB.Contribution.Source)
+	}
+}
+
+func TestLoadConfigHashDBContributionShardedParses(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte(`hashdb:
+  contribute: auto
+  contribution:
+    type: sharded
+    base_dir: /tmp/sharded
+    key_path: /tmp/sharded-key.json
+    source: local-private
+    shard_prefix_length: 3
+`)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if c.HashDB.Contribute != "auto" {
+		t.Fatalf("HashDB.Contribute = %q, want auto", c.HashDB.Contribute)
+	}
+	if c.HashDB.Contribution.Type != "sharded" {
+		t.Fatalf("Contribution.Type = %q", c.HashDB.Contribution.Type)
+	}
+	if c.HashDB.Contribution.BaseDir != "/tmp/sharded" {
+		t.Fatalf("Contribution.BaseDir = %q", c.HashDB.Contribution.BaseDir)
+	}
+	if c.HashDB.Contribution.KeyPath != "/tmp/sharded-key.json" {
+		t.Fatalf("Contribution.KeyPath = %q", c.HashDB.Contribution.KeyPath)
+	}
+	if c.HashDB.Contribution.ShardPrefixLength != 3 {
+		t.Fatalf("Contribution.ShardPrefixLength = %d, want 3", c.HashDB.Contribution.ShardPrefixLength)
+	}
+}
+
 func TestLoadConfigHashDBShardedSourceParses(t *testing.T) {
 	dir := setupTestDir(t)
 

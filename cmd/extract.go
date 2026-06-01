@@ -82,7 +82,7 @@ func Extract(archivePath string) error {
 		MaxDepth:          10,
 		MaxParallelProbes: cfg.MaxParallelProbes,
 		BudgetProfile:     budget.ParseProfile(cfg.ProbeBudgetProfile),
-		OnArchiveSuccess:  makeArchiveSuccessRecorder(learningStore),
+		OnArchiveSuccess:  makeArchiveSuccessRecorder(learningStore, cfg),
 		TryPassword: func(ap, parentPassword string) ([]string, error) {
 			// For nested archives, create a sub-provider
 			subProvider := newPasswordProvider(ap, filepath.Base(ap), cfg, learned)
@@ -196,11 +196,77 @@ func recordLearningSuccess(st *learningstore.Store, archivePath, password, sourc
 	return learning.SummarizeShapePatterns(ctx, st, 2)
 }
 
-func makeArchiveSuccessRecorder(st *learningstore.Store) func(archivePath, password string) {
+func makeArchiveSuccessRecorder(st *learningstore.Store, cfg *config.Config) func(archivePath, password string) {
 	return func(archivePath, password string) {
 		if err := recordLearningSuccess(st, archivePath, password, "auto_candidate"); err != nil {
 			fmt.Printf("警告：保存 SQLite 学习记录失败: %v\n", err)
 		}
+		contributeLocalHashDB(cfg, archivePath, password)
+	}
+}
+
+// contributeLocalHashDB appends a successful (archive, password) pair to the
+// configured local HashDB contribution target when contribution mode is auto.
+// All failures are soft: a warning is printed and the caller continues. No
+// network access is performed.
+func contributeLocalHashDB(cfg *config.Config, archivePath, password string) {
+	if cfg == nil || password == "" {
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.HashDB.Contribute))
+	if mode != "auto" {
+		return
+	}
+	c := cfg.HashDB.Contribution
+	keyPath := strings.TrimSpace(c.KeyPath)
+	if keyPath == "" {
+		fmt.Printf("警告：HashDB 贡献跳过：未配置 key_path\n")
+		return
+	}
+	source := c.Source
+	if source == "" {
+		source = "extract_success"
+	}
+	typ := strings.ToLower(strings.TrimSpace(c.Type))
+	if typ == "" {
+		if c.Path != "" {
+			typ = "bundle"
+		} else if c.BaseDir != "" {
+			typ = "sharded"
+		}
+	}
+
+	ctx := context.Background()
+	_, priv, err := hashdb.LoadOrCreateSigningKey(ctx, keyPath)
+	if err != nil {
+		fmt.Printf("警告：HashDB 贡献签名密钥不可用: %v\n", err)
+		return
+	}
+	inputs := []hashdb.ArchivePassword{{ArchivePath: archivePath, Password: password, Source: source}}
+
+	switch typ {
+	case "bundle":
+		if strings.TrimSpace(c.Path) == "" {
+			fmt.Printf("警告：HashDB 贡献跳过：bundle 类型缺少 path\n")
+			return
+		}
+		if _, err := hashdb.AppendSignedBundleRecords(ctx, c.Path, source, inputs, priv); err != nil {
+			fmt.Printf("警告：HashDB 本地 bundle 贡献失败: %v\n", err)
+		}
+	case "sharded":
+		if strings.TrimSpace(c.BaseDir) == "" {
+			fmt.Printf("警告：HashDB 贡献跳过：sharded 类型缺少 base_dir\n")
+			return
+		}
+		prefixLen := c.ShardPrefixLength
+		if prefixLen == 0 {
+			prefixLen = 2
+		}
+		if _, err := hashdb.AppendShardedSourceRecords(ctx, c.BaseDir, source, inputs, priv, prefixLen); err != nil {
+			fmt.Printf("警告：HashDB 本地 sharded 贡献失败: %v\n", err)
+		}
+	default:
+		fmt.Printf("警告：HashDB 贡献类型未知: %q\n", c.Type)
 	}
 }
 
