@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/bkmashiro/smart-extract/internal/budget"
+	"github.com/bkmashiro/smart-extract/internal/throttle"
 )
 
 // RecursiveExtractOptions controls recursive extraction behavior
@@ -17,6 +19,16 @@ type RecursiveExtractOptions struct {
 	// MaxParallelProbes caps the number of parallel password workers.
 	// 0 means use runtime.NumCPU(). Default is 4.
 	MaxParallelProbes int
+	// ThrottleDir enables a cross-process throttle for heavy probe workers when
+	// non-empty. This is used to keep Explorer multi-select launches from each
+	// consuming the full local parallel probe budget.
+	ThrottleDir string
+	// ThrottleSlots is the global cross-process probe slot cap. Values <=0 are
+	// treated as the local budgeted max parallelism.
+	ThrottleSlots int
+	// ThrottleStaleAfter controls stale lock-file reclamation. Zero disables
+	// reclamation.
+	ThrottleStaleAfter time.Duration
 	// BudgetProfile controls cost-aware candidate and probe budgets.
 	// The zero value is budget.ProfileNormal for backwards compatibility.
 	BudgetProfile budget.Profile
@@ -66,7 +78,8 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 		return "", "", err
 	}
 
-	maxPar := budgetedMaxParallel(opts, af, archiveSize(archivePath))
+	maxPar, releaseProbeBudget := acquireProbeBudget(opts, af, archiveSize(archivePath))
+	defer releaseProbeBudget()
 
 	// Use the appropriate probing strategy — both extract directly (no double-extraction)
 	switch af.Strategy {
@@ -143,6 +156,30 @@ func budgetedMaxParallel(opts RecursiveExtractOptions, af ArchiveFormat, archive
 		return 1
 	}
 	return rec.MaxParallelProbes
+}
+
+func acquireProbeBudget(opts RecursiveExtractOptions, af ArchiveFormat, archiveSizeBytes int64) (int, func()) {
+	budgeted := budgetedMaxParallel(opts, af, archiveSizeBytes)
+	if opts.ThrottleDir == "" {
+		return budgeted, func() {}
+	}
+
+	slots := opts.ThrottleSlots
+	if slots <= 0 {
+		slots = budgeted
+	}
+	maxParallel, leases, err := throttle.EffectiveParallel(context.Background(), budgeted, throttle.Options{
+		Dir:        opts.ThrottleDir,
+		Slots:      slots,
+		StaleAfter: opts.ThrottleStaleAfter,
+	})
+	if err != nil {
+		if opts.OnProgress != nil {
+			opts.OnProgress(fmt.Sprintf("警告：跨进程探测节流不可用，降级为串行探测: %v", err))
+		}
+		return 1, func() {}
+	}
+	return maxParallel, func() { throttle.ReleaseAll(leases) }
 }
 
 func archiveSize(path string) int64 {

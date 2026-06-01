@@ -13,7 +13,9 @@ A Windows tool that adds a right-click context menu entry to intelligently extra
   filename/parent extraction → session context → pattern rules → online stats →
   local dictionary → empty → config fallback.
 - Cost budget profiles (`light` / `normal` / `aggressive`) and bounded
-  parallelism for fast, predictable probing.
+  parallelism for fast, predictable probing, including a cross-process
+  lock-file throttle so Explorer multi-select launches do not each consume
+  the full local probe budget.
 - Optional **local-only** HashDB lookup and contribution: signed bundles and
   sharded directories on disk. No network access by default; plaintext
   passwords are never written to bundle/shard files (records are AES-GCM

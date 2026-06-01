@@ -23,6 +23,7 @@ import (
 	"github.com/bkmashiro/smart-extract/internal/learning"
 	"github.com/bkmashiro/smart-extract/internal/ml"
 	learningstore "github.com/bkmashiro/smart-extract/internal/store"
+	"github.com/bkmashiro/smart-extract/internal/throttle"
 	"github.com/bkmashiro/smart-extract/internal/ui"
 )
 
@@ -83,12 +84,15 @@ func Extract(archivePath string) error {
 	provider.resolvedPerson = person
 
 	opts := extractor.RecursiveExtractOptions{
-		SevenZipPath:      sevenZipPath,
-		BandizipPath:      cfg.BandizipPath,
-		MaxDepth:          10,
-		MaxParallelProbes: cfg.MaxParallelProbes,
-		BudgetProfile:     budget.ParseProfile(cfg.ProbeBudgetProfile),
-		OnArchiveSuccess:  makeArchiveSuccessRecorder(learningStore, cfg),
+		SevenZipPath:       sevenZipPath,
+		BandizipPath:       cfg.BandizipPath,
+		MaxDepth:           10,
+		MaxParallelProbes:  cfg.MaxParallelProbes,
+		ThrottleDir:        throttle.DefaultDir(),
+		ThrottleSlots:      cfg.MaxParallelProbes,
+		ThrottleStaleAfter: 10 * time.Minute,
+		BudgetProfile:      budget.ParseProfile(cfg.ProbeBudgetProfile),
+		OnArchiveSuccess:   makeArchiveSuccessRecorder(learningStore, cfg),
 		TryPassword: func(ap, parentPassword string) ([]string, error) {
 			// For nested archives, create a sub-provider
 			subProvider := newPasswordProvider(ap, filepath.Base(ap), cfg, learned)
