@@ -30,11 +30,16 @@ type HashDBConfig struct {
 	Sources []HashDBSource `yaml:"sources,omitempty"`
 }
 
-// HashDBSource describes a single local signed bundle file to consult.
+// HashDBSource describes a single local HashDB source to consult.
+// The default source type is a single signed bundle file at Path. Type
+// "sharded" uses BaseDir/ManifestPath and signed shard files.
 type HashDBSource struct {
-	Name      string `yaml:"name,omitempty"`
-	Path      string `yaml:"path"`
-	PublicKey string `yaml:"public_key,omitempty"`
+	Name         string `yaml:"name,omitempty"`
+	Type         string `yaml:"type,omitempty"`
+	Path         string `yaml:"path,omitempty"`
+	BaseDir      string `yaml:"base_dir,omitempty"`
+	ManifestPath string `yaml:"manifest_path,omitempty"`
+	PublicKey    string `yaml:"public_key,omitempty"`
 	// Disabled, when true, suppresses lookups against this source.
 	// Defaults to false so a configured source is enabled by default.
 	Disabled bool `yaml:"disabled,omitempty"`

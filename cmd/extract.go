@@ -439,16 +439,9 @@ func (p *passwordProvider) hashDBPasswords(ctx context.Context, archivePath stri
 		if src.Disabled {
 			continue
 		}
-		passwords, err := hashdb.LookupFileSource(ctx, hashdb.FileSource{
-			Name:      src.Name,
-			Path:      src.Path,
-			PublicKey: src.PublicKey,
-		}, archivePath)
+		passwords, err := p.lookupHashDBSource(ctx, src, archivePath)
 		if err != nil {
-			label := src.Name
-			if label == "" {
-				label = src.Path
-			}
+			label := hashDBSourceLabel(src)
 			fmt.Printf("警告：HashDB 来源 %s 查询失败: %v\n", label, err)
 			continue
 		}
@@ -461,6 +454,46 @@ func (p *passwordProvider) hashDBPasswords(ctx context.Context, archivePath stri
 		}
 	}
 	return out
+}
+
+func (p *passwordProvider) lookupHashDBSource(ctx context.Context, src config.HashDBSource, archivePath string) ([]string, error) {
+	sourceType := strings.ToLower(strings.TrimSpace(src.Type))
+	switch sourceType {
+	case "", "bundle":
+		return hashdb.LookupFileSource(ctx, hashdb.FileSource{
+			Name:      src.Name,
+			Path:      src.Path,
+			PublicKey: src.PublicKey,
+		}, archivePath)
+	case "sharded":
+		return hashdb.LookupShardedFileSource(ctx, hashdb.ShardedFileSource{
+			Name:         src.Name,
+			BaseDir:      src.BaseDir,
+			ManifestPath: src.ManifestPath,
+			PublicKey:    src.PublicKey,
+		}, archivePath)
+	default:
+		return nil, fmt.Errorf("unsupported source type %q", src.Type)
+	}
+}
+
+func hashDBSourceLabel(src config.HashDBSource) string {
+	if src.Name != "" {
+		return src.Name
+	}
+	if src.Path != "" {
+		return src.Path
+	}
+	if src.ManifestPath != "" {
+		return src.ManifestPath
+	}
+	if src.BaseDir != "" {
+		return src.BaseDir
+	}
+	if src.Type != "" {
+		return src.Type
+	}
+	return "<unnamed>"
 }
 
 func (p *passwordProvider) budgetRecommendation(archivePath string) budget.Recommendation {

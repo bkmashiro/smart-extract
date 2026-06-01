@@ -83,3 +83,51 @@ func TestLoadConfigHashDBLookupModeWithSource(t *testing.T) {
 		t.Fatalf("source[1].Disabled = false, want true")
 	}
 }
+
+func TestLoadConfigHashDBShardedSourceParses(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte(`hashdb:
+  mode: lookup
+  sources:
+    - name: bundle-src
+      path: /tmp/bundle.json
+      public_key: aa
+    - name: sharded-src
+      type: sharded
+      base_dir: /tmp/sharded
+      manifest_path: /tmp/sharded/manifest.json
+      public_key: bb
+`)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(c.HashDB.Sources) != 2 {
+		t.Fatalf("len(Sources) = %d, want 2", len(c.HashDB.Sources))
+	}
+	s0 := c.HashDB.Sources[0]
+	if s0.Type != "" {
+		t.Fatalf("source[0].Type = %q, want empty for default bundle", s0.Type)
+	}
+	if s0.Path != "/tmp/bundle.json" || s0.PublicKey != "aa" {
+		t.Fatalf("source[0] = %+v", s0)
+	}
+	s1 := c.HashDB.Sources[1]
+	if s1.Type != "sharded" {
+		t.Fatalf("source[1].Type = %q, want sharded", s1.Type)
+	}
+	if s1.BaseDir != "/tmp/sharded" {
+		t.Fatalf("source[1].BaseDir = %q", s1.BaseDir)
+	}
+	if s1.ManifestPath != "/tmp/sharded/manifest.json" {
+		t.Fatalf("source[1].ManifestPath = %q", s1.ManifestPath)
+	}
+	if s1.PublicKey != "bb" {
+		t.Fatalf("source[1].PublicKey = %q", s1.PublicKey)
+	}
+}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -188,6 +189,221 @@ func TestPasswordProviderSkipsDisabledHashDBSource(t *testing.T) {
 	}
 	if containsString(got, "hashdb-disabled-pass") {
 		t.Fatalf("disabled HashDB source leaked candidate: %#v", got)
+	}
+}
+
+// writeShardedSourceForTest builds and writes a sharded HashDB source (shards
+// + manifest) under baseDir binding archive bytes to passwords. Returns the
+// base dir and hex public key.
+func writeShardedSourceForTest(t *testing.T, baseDir, archivePath string, passwords []string) (string, string) {
+	t.Helper()
+
+	f, err := os.Open(archivePath)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	digest := hashdb.ArchiveHash(f)
+	f.Close()
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519 keygen: %v", err)
+	}
+	var recs []hashdb.Record
+	for _, pw := range passwords {
+		r, err := hashdb.BuildRecord(digest, pw, "test")
+		if err != nil {
+			t.Fatalf("BuildRecord: %v", err)
+		}
+		recs = append(recs, r)
+	}
+	manifest, err := hashdb.BuildShardedSourceFromRecords(context.Background(), baseDir, "test", recs, priv, 2)
+	if err != nil {
+		t.Fatalf("BuildShardedSourceFromRecords: %v", err)
+	}
+	data, err := hashdb.MarshalManifest(manifest)
+	if err != nil {
+		t.Fatalf("MarshalManifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, "manifest.json"), data, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	return baseDir, hex.EncodeToString(pub)
+}
+
+func TestPasswordProviderUsesShardedHashDBSource(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-sharded-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	shardBase := filepath.Join(dir, "shardroot")
+	if err := os.MkdirAll(shardBase, 0o755); err != nil {
+		t.Fatalf("mkdir shardroot: %v", err)
+	}
+	_, pubHex := writeShardedSourceForTest(t, shardBase, archivePath, []string{"sharded-found"})
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "sharded", Type: "sharded", BaseDir: shardBase, PublicKey: pubHex},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+	provider.candidateSource = fakeCandidateSource{}
+
+	got, err := provider.getPasswords(archivePath)
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if !containsString(got, "sharded-found") {
+		t.Fatalf("expected candidates to contain sharded-found, got %#v", got)
+	}
+	// Sharded candidate must come before the static fallback "fallback-pass".
+	idxShard, idxFallback := -1, -1
+	for i, pw := range got {
+		if idxShard < 0 && pw == "sharded-found" {
+			idxShard = i
+		}
+		if idxFallback < 0 && pw == "fallback-pass" {
+			idxFallback = i
+		}
+	}
+	if idxShard < 0 || idxFallback < 0 || idxShard >= idxFallback {
+		t.Fatalf("expected sharded-found before fallback-pass; got %#v (idxShard=%d idxFallback=%d)", got, idxShard, idxFallback)
+	}
+}
+
+func TestPasswordProviderUsesExplicitManifestPathForShardedSource(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-sharded-manifest-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	shardBase := filepath.Join(dir, "shardroot")
+	if err := os.MkdirAll(shardBase, 0o755); err != nil {
+		t.Fatalf("mkdir shardroot: %v", err)
+	}
+	_, pubHex := writeShardedSourceForTest(t, shardBase, archivePath, []string{"sharded-manifest-found"})
+	// Move the manifest to a non-default location.
+	otherManifest := filepath.Join(dir, "other-manifest.json")
+	if err := os.Rename(filepath.Join(shardBase, "manifest.json"), otherManifest); err != nil {
+		t.Fatalf("rename manifest: %v", err)
+	}
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "sharded", Type: "sharded", BaseDir: shardBase, ManifestPath: otherManifest, PublicKey: pubHex},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+	provider.candidateSource = fakeCandidateSource{}
+
+	got, err := provider.getPasswords(archivePath)
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if !containsString(got, "sharded-manifest-found") {
+		t.Fatalf("expected candidates to contain sharded-manifest-found, got %#v", got)
+	}
+}
+
+func TestPasswordProviderUnknownHashDBSourceTypeDoesNotAbort(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-unknown-type-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "exotic", Type: "from-the-future", Path: filepath.Join(dir, "ignored.json")},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+	provider.candidateSource = fakeCandidateSource{}
+
+	got, err := provider.getPasswords(archivePath)
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if !containsString(got, "fallback-pass") {
+		t.Fatalf("expected fallback to remain when HashDB source has unknown type, got %#v", got)
+	}
+}
+
+func TestPasswordProviderHashDBSourceOrderingAndDedupe(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-ordering-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	// Bundle source contributes [shared, only-bundle].
+	bundlePath, bundlePub := writeSignedBundleForTest(t, dir, archivePath, []string{"shared", "only-bundle"})
+
+	// Sharded source contributes [only-sharded, shared].
+	shardBase := filepath.Join(dir, "shardroot")
+	if err := os.MkdirAll(shardBase, 0o755); err != nil {
+		t.Fatalf("mkdir shardroot: %v", err)
+	}
+	_, shardPub := writeShardedSourceForTest(t, shardBase, archivePath, []string{"only-sharded", "shared"})
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "bundle", Path: bundlePath, PublicKey: bundlePub},
+				{Name: "sharded", Type: "sharded", BaseDir: shardBase, PublicKey: shardPub},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	got := provider.hashDBPasswords(context.Background(), archivePath)
+	want := []string{"shared", "only-bundle", "only-sharded"}
+	if len(got) != len(want) {
+		t.Fatalf("hashDBPasswords = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("hashDBPasswords[%d] = %q, want %q (full %#v)", i, got[i], want[i], got)
+		}
 	}
 }
 
