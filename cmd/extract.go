@@ -33,6 +33,20 @@ import (
 
 // Extract is the main entry point for extracting a single archive file.
 func Extract(archivePath string) error {
+	return ExtractWithOptions(archivePath, ExtractOptions{})
+}
+
+// ExtractOptions controls optional diagnostics for a single extraction.
+type ExtractOptions struct {
+	// DebugLog receives structured diagnostic lines for troubleshooting. It must
+	// not receive plaintext passwords; logs should report counts/sources only.
+	DebugLog io.Writer
+}
+
+// ExtractWithOptions extracts a single archive file with optional diagnostics.
+func ExtractWithOptions(archivePath string, options ExtractOptions) error {
+	debug := newDebugLogger(options.DebugLog)
+	debug.Logf("extract start archive=%s", filepath.Base(archivePath))
 	// Resolve to absolute path to handle relative paths and symlinks
 	absPath, err := filepath.Abs(archivePath)
 	if err == nil {
@@ -77,6 +91,7 @@ func Extract(archivePath string) error {
 
 	// Build password provider
 	provider := newPasswordProvider(archivePath, archiveName, cfg, learned)
+	provider.debug = debug
 	provider.candidateSource = learningStore
 	provider.sevenZipPath = sevenZipPath
 
@@ -100,6 +115,7 @@ func Extract(archivePath string) error {
 		TryPassword: func(ap, parentPassword string) ([]string, error) {
 			// For nested archives, create a sub-provider
 			subProvider := newPasswordProvider(ap, filepath.Base(ap), cfg, learned)
+			subProvider.debug = debug
 			subProvider.candidateSource = learningStore
 			subProvider.sevenZipPath = sevenZipPath
 			subProvider.parentPassword = parentPassword
@@ -108,6 +124,7 @@ func Extract(archivePath string) error {
 			return subProvider.getPasswords(ap)
 		},
 		OnProgress: func(msg string) {
+			debug.Logf("progress %s", msg)
 			fmt.Println(msg)
 		},
 	}
@@ -115,9 +132,11 @@ func Extract(archivePath string) error {
 	outDir, successPwd, err := extractor.RecursiveExtract(archivePath, opts, 0)
 	if err != nil {
 		// All passwords failed — ask user
+		debug.Logf("extract password candidates exhausted archive=%s err=%v", filepath.Base(archivePath), err)
 		return handleUnknownPassword(archivePath, archiveName, sevenZipPath, cfg, learned, learningStore, opts)
 	}
 
+	debug.Logf("extract success archive=%s output=%s password_present=%t", filepath.Base(archivePath), filepath.Base(outDir), successPwd != "")
 	fmt.Printf("\n✓ 解压完成 → %s\n", filepath.Base(outDir))
 
 	// Record success. With SQLite available, recordLearningSuccess via the
@@ -155,6 +174,7 @@ type passwordProvider struct {
 	resolvedPerson  string
 	sevenZipPath    string
 	parentPassword  string
+	debug           *debugLogger
 }
 
 func newPasswordProvider(archivePath, archiveName string, cfg *config.Config, learned *config.Learned) *passwordProvider {
@@ -435,11 +455,12 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 
 	if p.candidateSource != nil {
 		rec := p.budgetRecommendation(archivePath)
+		hashDBPasswords := p.hashDBPasswords(context.Background(), archivePath)
 		built, err := candidates.Build(context.Background(), candidates.Request{
 			ArchivePath:       archivePath,
 			ArchiveKey:        archiveName,
 			ParentPassword:    p.parentPassword,
-			HashDBPasswords:   p.hashDBPasswords(context.Background(), archivePath),
+			HashDBPasswords:   hashDBPasswords,
 			StaticPasswords:   p.staticPasswords(false),
 			FallbackPasswords: cfg.FallbackPasswords,
 			CandidateLimit:    rec.CandidateLimit,
@@ -448,9 +469,12 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 			return nil, err
 		}
 		passwords := make([]string, 0, len(built))
+		counts := make(map[string]int)
 		for _, candidate := range built {
 			passwords = append(passwords, candidate.Password)
+			counts[candidate.Source]++
 		}
+		p.debug.Logf("candidate summary archive=%s profile=%s limit=%d total=%d hashdb_matches=%d %s", archiveName, debugProfileName(cfg.ProbeBudgetProfile), rec.CandidateLimit, len(built), len(hashDBPasswords), sortedCountSummary(counts))
 		return passwords, nil
 	}
 
@@ -546,26 +570,35 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 	// Always try without password (empty string) as last resort
 	addPwd("")
 
+	p.debug.Logf("candidate summary archive=%s source=legacy total=%d", archiveName, len(passwords))
 	return passwords, nil
 }
 
 func (p *passwordProvider) hashDBPasswords(ctx context.Context, archivePath string) []string {
 	if p == nil || p.cfg == nil || !strings.EqualFold(p.cfg.HashDB.Mode, "lookup") {
+		if p != nil {
+			p.debug.Logf("hashdb summary mode=off")
+		}
 		return nil
 	}
 
 	var out []string
 	seen := make(map[string]struct{})
+	active := 0
 	for _, src := range p.cfg.HashDB.Sources {
+		label := hashDBSourceLabel(src)
 		if src.Disabled {
+			p.debug.Logf("hashdb source skipped name=%s reason=disabled", label)
 			continue
 		}
+		active++
 		passwords, err := p.lookupHashDBSource(ctx, src, archivePath)
 		if err != nil {
-			label := hashDBSourceLabel(src)
 			fmt.Printf("警告：HashDB 来源 %s 查询失败: %v\n", label, err)
+			p.debug.Logf("hashdb source error name=%s err=%v", label, err)
 			continue
 		}
+		p.debug.Logf("hashdb source lookup name=%s matches=%d", label, len(passwords))
 		for _, password := range passwords {
 			if _, ok := seen[password]; ok {
 				continue
@@ -574,6 +607,7 @@ func (p *passwordProvider) hashDBPasswords(ctx context.Context, archivePath stri
 			out = append(out, password)
 		}
 	}
+	p.debug.Logf("hashdb summary sources=%d active=%d matches=%d", len(p.cfg.HashDB.Sources), active, len(out))
 	return out
 }
 

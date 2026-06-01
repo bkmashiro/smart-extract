@@ -50,6 +50,7 @@ go build -ldflags="-H windowsgui" -o smart-extract.exe .
 smart-extract.exe --install     Install right-click menu
 smart-extract.exe --uninstall   Remove right-click menu
 smart-extract.exe --hashdb-public-key ./hashdb/private/signing.key.json
+smart-extract.exe --debug-log .\smart-extract-debug.log <archive>
 smart-extract.exe <archive>     Extract an archive (called by Explorer)
 ```
 
@@ -179,6 +180,21 @@ configured source's `disabled` flag without changing ordering or other fields.
 `--all` removes every HTTP source cache root (duplicates are removed once).
 Local bundle/sharded sources have no cache to clear and the named form
 rejects them with an explicit error.
+
+### Debug logs
+
+For dogfooding and bug reports, run an extraction with a diagnostic log:
+
+```powershell
+smart-extract.exe --debug-log .\smart-extract-debug.log .\archive.zip
+```
+
+The log records high-level extraction progress, candidate counts by source
+(`exact`, `hashdb`, `filename`, `session`, `pattern`, `dictionary`, `fallback`,
+etc.), active/disabled HashDB source lookups, cache/download errors surfaced by
+those lookups, and success/failure markers. It intentionally logs counts and
+source labels rather than plaintext password values; filename-style password
+hints such as `password=...` / `pwd-...` / `密码...` are redacted in log lines.
 
 ### Local learning store
 

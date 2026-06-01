@@ -19,6 +19,7 @@ type runDeps struct {
 	stderr          io.Writer
 	allocConsole    func()
 	waitForKeypress func(msg string)
+	extract         func(path string, opts cmd.ExtractOptions) error
 }
 
 func main() {
@@ -36,6 +37,7 @@ func main() {
 		stderr:          os.Stderr,
 		allocConsole:    ui.AllocConsole,
 		waitForKeypress: ui.WaitForKeypress,
+		extract:         cmd.ExtractWithOptions,
 	}
 	if code := run(os.Args[1:], deps); code != 0 {
 		os.Exit(code)
@@ -43,6 +45,9 @@ func main() {
 }
 
 func run(args []string, deps runDeps) int {
+	if deps.extract == nil {
+		deps.extract = cmd.ExtractWithOptions
+	}
 	// Strip surrounding quotes from arguments — some Windows shell
 	// expansions (e.g. drag-and-drop or certain "%1" substitutions) can
 	// leave literal quote characters in the argument.
@@ -221,19 +226,52 @@ func run(args []string, deps runDeps) int {
 		fmt.Fprintln(deps.stdout, "  smart-extract.exe --help         显示帮助")
 		deps.waitForKeypress("")
 
+	case "--debug-log":
+		if len(args) < 3 {
+			return reportFatal(deps, "用法: smart-extract.exe --debug-log <log.txt> <archive> [archive...]")
+		}
+		if code := extractArchives(args[2:], deps, args[1]); code != 0 {
+			return code
+		}
+
 	default:
-		hasError := false
-		for _, archivePath := range args {
-			if err := cmd.Extract(archivePath); err != nil {
-				deps.allocConsole()
-				fmt.Fprintf(deps.stdout, "\n✗ 解压失败 (%s): %v\n", filepath.Base(archivePath), err)
-				hasError = true
-			}
+		if code := extractArchives(args, deps, ""); code != 0 {
+			return code
 		}
-		if hasError {
-			deps.waitForKeypress("有文件解压失败，按 Enter 键关闭...")
-			return 1
+	}
+	return 0
+}
+
+func extractArchives(archivePaths []string, deps runDeps, debugLogPath string) int {
+	var debugLog io.Writer
+	var debugFile *os.File
+	if debugLogPath != "" {
+		if err := os.MkdirAll(filepath.Dir(debugLogPath), 0o755); err != nil && filepath.Dir(debugLogPath) != "." {
+			return reportFatal(deps, "创建调试日志目录失败: %v", err)
 		}
+		f, err := os.Create(debugLogPath)
+		if err != nil {
+			return reportFatal(deps, "创建调试日志失败: %v", err)
+		}
+		debugFile = f
+		debugLog = f
+		fmt.Fprintf(deps.stdout, "调试日志: %s\n", debugLogPath)
+	}
+	if debugFile != nil {
+		defer debugFile.Close()
+	}
+
+	hasError := false
+	for _, archivePath := range archivePaths {
+		if err := deps.extract(archivePath, cmd.ExtractOptions{DebugLog: debugLog}); err != nil {
+			deps.allocConsole()
+			fmt.Fprintf(deps.stdout, "\n✗ 解压失败 (%s): %v\n", filepath.Base(archivePath), err)
+			hasError = true
+		}
+	}
+	if hasError {
+		deps.waitForKeypress("有文件解压失败，按 Enter 键关闭...")
+		return 1
 	}
 	return 0
 }
@@ -251,6 +289,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-enable-source <name>               启用指定 HashDB 源")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache <name>                 清理指定 HashDB 源的本地缓存")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache --all                  清理所有 HashDB 源的本地缓存")
+	fmt.Fprintln(w, "  smart-extract.exe --debug-log <log.txt> <archive> [archive...] 输出调试日志（不记录明文密码）")
 	fmt.Fprintln(w, "  smart-extract.exe <archive>      解压文件")
 	fmt.Fprintln(w)
 }

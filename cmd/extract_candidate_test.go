@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/bkmashiro/smart-extract/internal/config"
@@ -61,6 +63,46 @@ func TestPasswordProviderUsesLearningCandidateSourceBeforeLegacyFallbacks(t *tes
 	want := []string{"exact-pass", "filename-pass", "session-pass", "", "fallback-pass"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("password candidates = %#v, want %#v", got, want)
+	}
+}
+
+func TestPasswordProviderDebugLogSummarizesCandidateSourcesWithoutPasswords(t *testing.T) {
+	cfg := &config.Config{
+		People:             map[string]*config.Person{},
+		FallbackPasswords:  []string{"fallback-secret"},
+		ProbeBudgetProfile: "light",
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider("/downloads/password=filename-secret.zip", "password=filename-secret.zip", cfg, learned)
+	provider.candidateSource = fakeCandidateSource{
+		exact: map[string]string{"password=filename-secret.zip": "exact-secret"},
+	}
+	var log bytes.Buffer
+	provider.debug = newDebugLogger(&log)
+
+	got, err := provider.getPasswords("/downloads/password=filename-secret.zip")
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	for _, password := range []string{"exact-secret", "filename-secret", "fallback-secret"} {
+		if !containsString(got, password) {
+			t.Fatalf("expected candidate %q in %#v", password, got)
+		}
+	}
+	out := log.String()
+	for _, want := range []string{"candidate summary", "archive=password=[redacted]", "profile=light", "limit=", "exact=1", "filename=1", "fallback=1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("debug log missing %q: %s", want, out)
+		}
+	}
+	for _, secret := range []string{"exact-secret", "filename-secret", "fallback-secret"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("debug log leaked plaintext password %q: %s", secret, out)
+		}
 	}
 }
 

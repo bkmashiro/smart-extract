@@ -251,6 +251,49 @@ func TestPasswordProviderSkipsDisabledHashDBSource(t *testing.T) {
 	}
 }
 
+func TestPasswordProviderDebugLogSummarizesHashDBSourcesWithoutPasswords(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-debug-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	bundlePath, pubHex := writeSignedBundleForTest(t, dir, archivePath, []string{"hashdb-debug-secret"})
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "disabled-source", Path: bundlePath, PublicKey: pubHex, Disabled: true},
+				{Name: "active-source", Path: bundlePath, PublicKey: pubHex},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+	var log bytes.Buffer
+	provider.debug = newDebugLogger(&log)
+
+	got := provider.hashDBPasswords(context.Background(), archivePath)
+	if len(got) != 1 || got[0] != "hashdb-debug-secret" {
+		t.Fatalf("hashDBPasswords = %#v, want [hashdb-debug-secret]", got)
+	}
+	out := log.String()
+	for _, want := range []string{"hashdb source skipped name=disabled-source reason=disabled", "hashdb source lookup name=active-source", "matches=1", "hashdb summary sources=2 active=1 matches=1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("debug log missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "hashdb-debug-secret") {
+		t.Fatalf("debug log leaked plaintext password: %s", out)
+	}
+}
+
 // writeShardedSourceForTest builds and writes a sharded HashDB source (shards
 // + manifest) under baseDir binding archive bytes to passwords. Returns the
 // base dir and hex public key.

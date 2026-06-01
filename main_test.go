@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bkmashiro/smart-extract/cmd"
 	"github.com/bkmashiro/smart-extract/internal/config"
 )
 
@@ -20,7 +21,10 @@ func newTestDeps() (runDeps, *bytes.Buffer, *bytes.Buffer) {
 		stdout:          &stdout,
 		stderr:          &stderr,
 		allocConsole:    func() {},
-		waitForKeypress: func(msg string) {},
+		waitForKeypress: func(string) {},
+		extract: func(path string, opts cmd.ExtractOptions) error {
+			return nil
+		},
 	}
 	return deps, &stdout, &stderr
 }
@@ -236,6 +240,49 @@ func TestRunHashDBDisableAndEnableSourceFlipsConfig(t *testing.T) {
 	}
 	if cfg.HashDB.Sources[1].Disabled {
 		t.Fatalf("mirror-b should be enabled, got %+v", cfg.HashDB.Sources[1])
+	}
+}
+
+func TestRunDebugLogWritesToFileAndPassesLoggerToExtraction(t *testing.T) {
+	setupTempConfig(t)
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "sample.zip")
+	if err := os.WriteFile(archivePath, []byte("not-real-zip"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	logPath := filepath.Join(dir, "debug.log")
+
+	deps, stdout, stderr := newTestDeps()
+	var gotPath string
+	var wroteDebug bool
+	deps.extract = func(path string, opts cmd.ExtractOptions) error {
+		gotPath = path
+		if opts.DebugLog == nil {
+			t.Fatalf("DebugLog is nil")
+		}
+		_, _ = opts.DebugLog.Write([]byte("debug-line\n"))
+		wroteDebug = true
+		return nil
+	}
+
+	if code := run([]string{"--debug-log", logPath, archivePath}, deps); code != 0 {
+		t.Fatalf("exit code=%d stderr=%s", code, stderr.String())
+	}
+	if gotPath != archivePath {
+		t.Fatalf("extract path=%q, want %q", gotPath, archivePath)
+	}
+	if !wroteDebug {
+		t.Fatalf("extract hook did not write debug output")
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read debug log: %v", err)
+	}
+	if !strings.Contains(string(data), "debug-line") {
+		t.Fatalf("debug log missing hook output: %q", string(data))
+	}
+	if !strings.Contains(stdout.String(), logPath) {
+		t.Fatalf("stdout should mention debug log path, got: %q", stdout.String())
 	}
 }
 
