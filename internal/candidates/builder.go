@@ -88,18 +88,31 @@ func Build(ctx context.Context, req Request, source Source) ([]Candidate, error)
 	}
 
 	if source != nil {
-		rules, err := source.PatternRules(ctx, "shape", ShapeKey(filepath.Base(req.ArchivePath)))
-		if err != nil {
-			return nil, err
+		archiveBase := filepath.Base(req.ArchivePath)
+		patternQueries := []struct {
+			patternType string
+			patternKey  string
+		}{
+			{"shape", ShapeKey(archiveBase)},
+			{"stem_shape", StemShapeKey(archiveBase)},
 		}
-		sort.SliceStable(rules, func(i, j int) bool {
-			if rules[i].Confidence != rules[j].Confidence {
-				return rules[i].Confidence > rules[j].Confidence
+		for _, q := range patternQueries {
+			if q.patternKey == "" {
+				continue
 			}
-			return rules[i].Support > rules[j].Support
-		})
-		for _, rule := range rules {
-			builder.add(Candidate{Password: rule.Password, Source: SourcePattern, Score: 10 + rule.Confidence})
+			rules, err := source.PatternRules(ctx, q.patternType, q.patternKey)
+			if err != nil {
+				return nil, err
+			}
+			sort.SliceStable(rules, func(i, j int) bool {
+				if rules[i].Confidence != rules[j].Confidence {
+					return rules[i].Confidence > rules[j].Confidence
+				}
+				return rules[i].Support > rules[j].Support
+			})
+			for _, rule := range rules {
+				builder.add(Candidate{Password: rule.Password, Source: SourcePattern, Score: 10 + rule.Confidence})
+			}
 		}
 	}
 
@@ -177,8 +190,18 @@ func ExtractFilenamePasswords(filename string) []string {
 
 // ShapeKey normalizes filename digits for simple batch-derived pattern lookup.
 func ShapeKey(filename string) string {
+	base := filepath.Base(filename)
+	ext := filepath.Ext(base)
+	stem := base
+	if ext != "" && len(ext) < len(base) {
+		stem = base[:len(base)-len(ext)]
+	}
+	return shapeDigits(stem) + strings.ToLower(ext)
+}
+
+func shapeDigits(s string) string {
 	var b strings.Builder
-	for _, r := range filename {
+	for _, r := range s {
 		if r >= '0' && r <= '9' {
 			b.WriteRune('N')
 			continue
@@ -186,4 +209,24 @@ func ShapeKey(filename string) string {
 		b.WriteRune(r)
 	}
 	return strings.ToLower(b.String())
+}
+
+// StemShapeKey returns the ShapeKey of the filename's stem (without its final
+// extension). Returns "" when the stem has no digits to generalize, so callers
+// can skip non-informative lookups.
+func StemShapeKey(filename string) string {
+	base := filepath.Base(filename)
+	ext := filepath.Ext(base)
+	stem := base
+	if ext != "" && len(ext) < len(base) {
+		stem = base[:len(base)-len(ext)]
+	}
+	if stem == "" {
+		return ""
+	}
+	shaped := shapeDigits(stem)
+	if shaped == strings.ToLower(stem) {
+		return ""
+	}
+	return shaped
 }

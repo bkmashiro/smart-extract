@@ -310,6 +310,51 @@ func TestRecordLearningSuccessDerivesShapePatternsAfterRepeatedSuccess(t *testin
 	}
 }
 
+func TestRecordLearningSuccessDerivesStemShapeAcrossArchiveExtensions(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	for _, name := range []string{"RJ123456.zip", "RJ654321.rar"} {
+		archivePath := filepath.Join(dir, name)
+		if err := recordLearningSuccess(st, archivePath, "stem-derived-pass", "auto_candidate"); err != nil {
+			t.Fatalf("recordLearningSuccess(%s): %v", name, err)
+		}
+	}
+
+	rules, err := st.PatternRules(context.Background(), "stem_shape", "rjnnnnnn")
+	if err != nil {
+		t.Fatalf("PatternRules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("len(stem_shape rules) = %d, want 1; rules=%+v", len(rules), rules)
+	}
+	if rules[0].Password != "stem-derived-pass" || rules[0].Support != 2 {
+		t.Fatalf("unexpected stem_shape rule: %+v", rules[0])
+	}
+
+	thirdPath := filepath.Join(dir, "RJ999999.7z")
+	provider := newPasswordProvider(thirdPath, "RJ999999.7z", &config.Config{
+		People: map[string]*config.Person{},
+	}, &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	})
+	provider.candidateSource = st
+	got, err := provider.getPasswords(thirdPath)
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if !containsString(got, "stem-derived-pass") {
+		t.Fatalf("expected candidates to contain stem-derived-pass for cross-extension archive; got %#v", got)
+	}
+}
+
 func TestArchiveSuccessRecorderLearnsTopLevelAndNestedArchives(t *testing.T) {
 	dir := t.TempDir()
 	config.Init(dir)

@@ -11,6 +11,7 @@ import (
 
 const (
 	shapePatternType   = "shape"
+	stemShapeType      = "stem_shape"
 	shapePatternSource = "local_summary"
 	defaultMinSupport  = 2
 )
@@ -31,29 +32,50 @@ func SummarizeShapePatterns(ctx context.Context, st *store.Store, minSupport int
 	}
 
 	groups := make(map[shapePattern]map[string]struct{})
+	stemGroups := make(map[shapePattern]map[string]struct{})
 	for _, obs := range observations {
 		if obs.ArchiveName == "" || obs.Password == "" {
 			continue
 		}
-		key := candidates.ShapeKey(obs.ArchiveName)
 		normalizedName := strings.ToLower(obs.ArchiveName)
+		key := candidates.ShapeKey(obs.ArchiveName)
 		if key == "" || key == normalizedName {
-			continue
+			// Keep looking for a cross-extension stem rule even when the full
+			// filename shape is not useful.
+		} else {
+			addShapeObservation(groups, shapePattern{key: key, password: obs.Password}, normalizedName)
 		}
-		group := shapePattern{key: key, password: obs.Password}
-		if groups[group] == nil {
-			groups[group] = make(map[string]struct{})
+
+		stemKey := candidates.StemShapeKey(obs.ArchiveName)
+		if stemKey != "" {
+			addShapeObservation(stemGroups, shapePattern{key: stemKey, password: obs.Password}, normalizedStem(obs.ArchiveName))
 		}
-		groups[group][normalizedName] = struct{}{}
 	}
 
+	if err := upsertShapeGroups(ctx, st, shapePatternType, groups, minSupport); err != nil {
+		return err
+	}
+	if err := upsertShapeGroups(ctx, st, stemShapeType, stemGroups, minSupport); err != nil {
+		return err
+	}
+	return nil
+}
+
+func addShapeObservation(groups map[shapePattern]map[string]struct{}, group shapePattern, identity string) {
+	if groups[group] == nil {
+		groups[group] = make(map[string]struct{})
+	}
+	groups[group][identity] = struct{}{}
+}
+
+func upsertShapeGroups(ctx context.Context, st *store.Store, patternType string, groups map[shapePattern]map[string]struct{}, minSupport int) error {
 	for group, names := range groups {
 		support := len(names)
 		if support < minSupport {
 			continue
 		}
 		if err := st.UpsertPatternRule(ctx, store.PatternRule{
-			PatternType: shapePatternType,
+			PatternType: patternType,
 			PatternKey:  group.key,
 			Password:    group.password,
 			Alpha:       float64(support + 1),
@@ -62,10 +84,18 @@ func SummarizeShapePatterns(ctx context.Context, st *store.Store, minSupport int
 			Confidence:  float64(support) / float64(support+1),
 			Source:      shapePatternSource,
 		}); err != nil {
-			return fmt.Errorf("upsert shape pattern rule: %w", err)
+			return fmt.Errorf("upsert %s pattern rule: %w", patternType, err)
 		}
 	}
 	return nil
+}
+
+func normalizedStem(filename string) string {
+	name := strings.ToLower(filename)
+	if dot := strings.LastIndex(name, "."); dot > 0 {
+		return name[:dot]
+	}
+	return name
 }
 
 type shapePattern struct {

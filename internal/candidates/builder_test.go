@@ -95,6 +95,77 @@ func TestBuildUsesShapePatternForNumberedFilenames(t *testing.T) {
 	assertCandidates(t, got, want)
 }
 
+func TestBuildUsesStemShapePatternAcrossExtensions(t *testing.T) {
+	source := &fakeSource{
+		patternRulesByKey: map[string][]store.PatternRule{
+			"rjnnnnnn": {{Password: "stem-pass", Confidence: 0.7, Support: 3}},
+		},
+	}
+
+	got, err := Build(context.Background(), Request{
+		ArchivePath:     `/downloads/RJ999999.7z`,
+		ArchiveKey:      "RJ999999.7z",
+		DictionaryLimit: 10,
+	}, source)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	want := []Candidate{
+		{Password: "stem-pass", Source: SourcePattern},
+		{Password: "", Source: SourceEmpty},
+	}
+	assertCandidates(t, got, want)
+}
+
+func TestBuildPrefersFullShapeBeforeStemShape(t *testing.T) {
+	source := &fakeSource{
+		patternRulesByKey: map[string][]store.PatternRule{
+			"rjnnnnnn.7z": {{Password: "full-shape-pass", Confidence: 0.9, Support: 5}},
+			"rjnnnnnn":    {{Password: "stem-pass", Confidence: 0.7, Support: 3}},
+		},
+	}
+
+	got, err := Build(context.Background(), Request{
+		ArchivePath:     `/downloads/RJ999999.7z`,
+		ArchiveKey:      "RJ999999.7z",
+		DictionaryLimit: 10,
+	}, source)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	want := []Candidate{
+		{Password: "full-shape-pass", Source: SourcePattern},
+		{Password: "stem-pass", Source: SourcePattern},
+		{Password: "", Source: SourceEmpty},
+	}
+	assertCandidates(t, got, want)
+}
+
+func TestBuildSkipsStemShapeQueryForNonGeneralizableStem(t *testing.T) {
+	source := &fakeSource{
+		patternRulesByKey: map[string][]store.PatternRule{
+			"release": {{Password: "should-not-appear", Confidence: 0.9, Support: 5}},
+		},
+	}
+
+	got, err := Build(context.Background(), Request{
+		ArchivePath:     `/downloads/release.zip`,
+		ArchiveKey:      "release.zip",
+		DictionaryLimit: 10,
+	}, source)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	for _, candidate := range got {
+		if candidate.Password == "should-not-appear" {
+			t.Fatalf("did not expect non-generalizable stem rule, got %#v", got)
+		}
+	}
+}
+
 func assertCandidates(t *testing.T, got, want []Candidate) {
 	t.Helper()
 	if len(got) != len(want) {

@@ -171,6 +171,89 @@ func TestSummarizeShapePatternsIgnoresEmptyFields(t *testing.T) {
 	}
 }
 
+func TestSummarizeShapePatternsDerivesStemShapeAcrossExtensions(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+
+	for _, name := range []string{"RJ123456.zip", "RJ654321.rar"} {
+		if _, err := st.AddObservation(ctx, store.PasswordObservation{
+			ArchiveName: name,
+			Password:    "shared-pass",
+			Source:      "test",
+		}); err != nil {
+			t.Fatalf("AddObservation %s: %v", name, err)
+		}
+	}
+
+	if err := SummarizeShapePatterns(ctx, st, 2); err != nil {
+		t.Fatalf("SummarizeShapePatterns: %v", err)
+	}
+
+	rules, err := st.PatternRules(ctx, "stem_shape", "rjnnnnnn")
+	if err != nil {
+		t.Fatalf("PatternRules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("len(rules) = %d, want 1; rules=%+v", len(rules), rules)
+	}
+	r := rules[0]
+	if r.Password != "shared-pass" {
+		t.Fatalf("rule.Password = %q, want shared-pass", r.Password)
+	}
+	if r.Support != 2 {
+		t.Fatalf("rule.Support = %d, want 2", r.Support)
+	}
+
+	// A single observation should not produce a stem_shape rule either.
+	stSingle := openTestStore(t)
+	if _, err := stSingle.AddObservation(ctx, store.PasswordObservation{
+		ArchiveName: "RJ123456.zip",
+		Password:    "lonely-pass",
+		Source:      "test",
+	}); err != nil {
+		t.Fatalf("AddObservation: %v", err)
+	}
+	if err := SummarizeShapePatterns(ctx, stSingle, 2); err != nil {
+		t.Fatalf("SummarizeShapePatterns: %v", err)
+	}
+	singleRules, err := stSingle.PatternRules(ctx, "stem_shape", "rjnnnnnn")
+	if err != nil {
+		t.Fatalf("PatternRules: %v", err)
+	}
+	if len(singleRules) != 0 {
+		t.Fatalf("expected no stem_shape rule from one observation, got %+v", singleRules)
+	}
+}
+
+func TestSummarizeShapePatternsStemShapeIgnoresDuplicateStems(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+
+	// Same stem (rj123456), different cases/extensions, same password — must
+	// not inflate stem_shape support past 1, so no rule emerges at min support 2.
+	for _, name := range []string{"RJ123456.zip", "rj123456.rar", "RJ123456.7z"} {
+		if _, err := st.AddObservation(ctx, store.PasswordObservation{
+			ArchiveName: name,
+			Password:    "shared-pass",
+			Source:      "test",
+		}); err != nil {
+			t.Fatalf("AddObservation %s: %v", name, err)
+		}
+	}
+
+	if err := SummarizeShapePatterns(ctx, st, 2); err != nil {
+		t.Fatalf("SummarizeShapePatterns: %v", err)
+	}
+
+	rules, err := st.PatternRules(ctx, "stem_shape", "rjnnnnnn")
+	if err != nil {
+		t.Fatalf("PatternRules: %v", err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("expected duplicate-stem observations not to create stem_shape rule, got %+v", rules)
+	}
+}
+
 func TestSummarizeShapePatternsDefaultMinSupportIsTwo(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)
