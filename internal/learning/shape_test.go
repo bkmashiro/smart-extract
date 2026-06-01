@@ -90,6 +90,60 @@ func TestSummarizeShapePatternsDerivesRuleFromTwoMatchingObservations(t *testing
 	}
 }
 
+func TestSummarizeShapePatternsIgnoresDuplicateArchiveNames(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+
+	for i := 0; i < 2; i++ {
+		if _, err := st.AddObservation(ctx, store.PasswordObservation{
+			ArchiveName: "RJ123456.zip",
+			Password:    "shared-pass",
+			Source:      "test",
+		}); err != nil {
+			t.Fatalf("AddObservation: %v", err)
+		}
+	}
+
+	if err := SummarizeShapePatterns(ctx, st, 2); err != nil {
+		t.Fatalf("SummarizeShapePatterns: %v", err)
+	}
+
+	rules, err := st.PatternRules(ctx, "shape", "rjnnnnnn.zip")
+	if err != nil {
+		t.Fatalf("PatternRules: %v", err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("expected duplicate archive observations not to create rule, got %+v", rules)
+	}
+}
+
+func TestSummarizeShapePatternsIgnoresNonGeneralizableShapes(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+
+	for _, name := range []string{"release.zip", "RELEASE.zip"} {
+		if _, err := st.AddObservation(ctx, store.PasswordObservation{
+			ArchiveName: name,
+			Password:    "shared-pass",
+			Source:      "test",
+		}); err != nil {
+			t.Fatalf("AddObservation: %v", err)
+		}
+	}
+
+	if err := SummarizeShapePatterns(ctx, st, 0); err != nil {
+		t.Fatalf("SummarizeShapePatterns: %v", err)
+	}
+
+	rules, err := st.PatternRules(ctx, "shape", "release.zip")
+	if err != nil {
+		t.Fatalf("PatternRules: %v", err)
+	}
+	if len(rules) != 0 {
+		t.Fatalf("expected no rule for shape without numeric placeholder, got %+v", rules)
+	}
+}
+
 func TestSummarizeShapePatternsIgnoresEmptyFields(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)

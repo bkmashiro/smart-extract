@@ -3,6 +3,7 @@ package learning
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/bkmashiro/smart-extract/internal/candidates"
 	"github.com/bkmashiro/smart-extract/internal/store"
@@ -29,19 +30,25 @@ func SummarizeShapePatterns(ctx context.Context, st *store.Store, minSupport int
 		return fmt.Errorf("list observations for shape summary: %w", err)
 	}
 
-	groups := make(map[shapePattern]int)
+	groups := make(map[shapePattern]map[string]struct{})
 	for _, obs := range observations {
 		if obs.ArchiveName == "" || obs.Password == "" {
 			continue
 		}
 		key := candidates.ShapeKey(obs.ArchiveName)
-		if key == "" {
+		normalizedName := strings.ToLower(obs.ArchiveName)
+		if key == "" || key == normalizedName {
 			continue
 		}
-		groups[shapePattern{key: key, password: obs.Password}]++
+		group := shapePattern{key: key, password: obs.Password}
+		if groups[group] == nil {
+			groups[group] = make(map[string]struct{})
+		}
+		groups[group][normalizedName] = struct{}{}
 	}
 
-	for group, support := range groups {
+	for group, names := range groups {
+		support := len(names)
 		if support < minSupport {
 			continue
 		}
