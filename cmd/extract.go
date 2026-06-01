@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -686,15 +688,23 @@ func cachedHashDBDownloadTo(ctx context.Context, rawURL, targetPath string, opts
 	default:
 		return "", fmt.Errorf("hashdb source cache: unsupported compression %q (supported: gzip)", opts.Compression)
 	}
-	if opts.SHA256 != "" {
-		raw, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(opts.SHA256)))
+	wantShaOpt := strings.ToLower(strings.TrimSpace(opts.SHA256))
+	if wantShaOpt != "" {
+		raw, err := hex.DecodeString(wantShaOpt)
 		if err != nil || len(raw) != sha256.Size {
 			return "", fmt.Errorf("hashdb source cache: malformed sha256 %q", opts.SHA256)
 		}
 	}
+	metaPath := targetPath + ".meta.json"
 	if _, err := os.Stat(targetPath); err == nil {
-		return targetPath, nil
-	} else if err != nil && !os.IsNotExist(err) {
+		if m, mErr := readCachedHashDBMetadata(metaPath); mErr == nil {
+			if cachedHashDBMetadataMatches(m, rawURL, compression, wantShaOpt) {
+				return targetPath, nil
+			}
+		} else if !errors.Is(mErr, os.ErrNotExist) {
+			// Unreadable metadata: treat as mismatch and refresh.
+		}
+	} else if !os.IsNotExist(err) {
 		return "", fmt.Errorf("hashdb source cache: stat %s: %w", targetPath, err)
 	}
 	parsed, err := url.Parse(rawURL)
@@ -728,12 +738,11 @@ func cachedHashDBDownloadTo(ctx context.Context, rawURL, targetPath string, opts
 		return "", fmt.Errorf("hashdb source cache: response too large (limit 64 MiB)")
 	}
 
-	if opts.SHA256 != "" {
-		sum := sha256.Sum256(downloaded)
-		gotHex := hex.EncodeToString(sum[:])
-		wantHex := strings.ToLower(strings.TrimSpace(opts.SHA256))
-		if gotHex != wantHex {
-			return "", fmt.Errorf("hashdb source cache: sha256 mismatch for %s: got %s, want %s", rawURL, gotHex, wantHex)
+	rawSum := sha256.Sum256(downloaded)
+	downloadedShaHex := hex.EncodeToString(rawSum[:])
+	if wantShaOpt != "" {
+		if downloadedShaHex != wantShaOpt {
+			return "", fmt.Errorf("hashdb source cache: sha256 mismatch for %s: got %s, want %s", rawURL, downloadedShaHex, wantShaOpt)
 		}
 	}
 
@@ -773,7 +782,77 @@ func cachedHashDBDownloadTo(ctx context.Context, rawURL, targetPath string, opts
 	if err := os.Rename(tmpPath, targetPath); err != nil {
 		return "", fmt.Errorf("hashdb source cache: install cache file: %w", err)
 	}
+	meta := cachedHashDBMetadata{
+		URL:              rawURL,
+		Compression:      compression,
+		SHA256:           wantShaOpt,
+		DownloadedSHA256: downloadedShaHex,
+		CachedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if err := writeCachedHashDBMetadata(metaPath, meta); err != nil {
+		return "", err
+	}
 	return targetPath, nil
+}
+
+// cachedHashDBMetadata is the sidecar stored next to a cached HashDB payload.
+// It binds a cache file to the (url, compression, sha256) that produced it so
+// configuration changes force a redownload rather than silently reusing stale
+// content.
+type cachedHashDBMetadata struct {
+	URL              string `json:"url"`
+	Compression      string `json:"compression"`
+	SHA256           string `json:"sha256"`
+	DownloadedSHA256 string `json:"downloaded_sha256"`
+	CachedAt         string `json:"cached_at"`
+}
+
+func readCachedHashDBMetadata(path string) (cachedHashDBMetadata, error) {
+	var m cachedHashDBMetadata
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return m, err
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return m, err
+	}
+	return m, nil
+}
+
+func cachedHashDBMetadataMatches(m cachedHashDBMetadata, rawURL, compression, sha string) bool {
+	gotCompression := strings.ToLower(strings.TrimSpace(m.Compression))
+	gotSha := strings.ToLower(strings.TrimSpace(m.SHA256))
+	return m.URL == rawURL && gotCompression == compression && gotSha == sha
+}
+
+func writeCachedHashDBMetadata(metaPath string, m cachedHashDBMetadata) error {
+	data, err := json.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("hashdb source cache: marshal metadata: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(metaPath), ".meta-*.tmp")
+	if err != nil {
+		return fmt.Errorf("hashdb source cache: create metadata temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("hashdb source cache: write metadata temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("hashdb source cache: close metadata temp: %w", err)
+	}
+	if err := os.Rename(tmpPath, metaPath); err != nil {
+		return fmt.Errorf("hashdb source cache: install metadata: %w", err)
+	}
+	keep = true
+	return nil
 }
 
 func resolveHashDBURL(baseURL, relPath string) (string, error) {

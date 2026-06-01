@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -403,8 +404,17 @@ func TestPasswordProviderDownloadsOnlyMatchingHTTPHashDBShard(t *testing.T) {
 		t.Fatalf("expected one cached manifest, got %v err=%v", cachedManifest, err)
 	}
 	cachedShards, err := filepath.Glob(filepath.Join(dir, "cache", "*", "shards", "*.json"))
-	if err != nil || len(cachedShards) != 1 {
-		t.Fatalf("expected one cached matching shard, got %v err=%v", cachedShards, err)
+	if err != nil {
+		t.Fatalf("glob shards: %v", err)
+	}
+	shards := cachedShards[:0]
+	for _, p := range cachedShards {
+		if !strings.HasSuffix(p, ".meta.json") {
+			shards = append(shards, p)
+		}
+	}
+	if len(shards) != 1 {
+		t.Fatalf("expected one cached matching shard, got %v", shards)
 	}
 }
 
@@ -698,6 +708,372 @@ func TestPasswordProviderRejectsHTTPHashDBBundleSHA256Mismatch(t *testing.T) {
 	cached, _ := filepath.Glob(filepath.Join(dir, "cache", "*", "bundle.json"))
 	if len(cached) != 0 {
 		t.Fatalf("expected no cache file installed on sha mismatch, got %v", cached)
+	}
+}
+
+func TestPasswordProviderRefreshesHashDBBundleCacheWithoutMetadata(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-meta-refresh-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	bundlePath, pubHex := writeSignedBundleForTest(t, dir, archivePath, []string{"refresh-new-pw"})
+	bundleData, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		_, _ = w.Write(bundleData)
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(dir, "cache")
+	src := config.HashDBSource{
+		Name:      "http-bundle-refresh",
+		URL:       server.URL + "/bundle.json",
+		CacheDir:  cacheDir,
+		PublicKey: pubHex,
+	}
+	cacheRoot, err := hashDBSourceCacheRoot(src)
+	if err != nil {
+		t.Fatalf("hashDBSourceCacheRoot: %v", err)
+	}
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		t.Fatalf("mkdir cacheRoot: %v", err)
+	}
+	// Pre-existing cache file from a previous run, but no metadata sidecar.
+	staleTarget := filepath.Join(cacheRoot, "bundle.json")
+	if err := os.WriteFile(staleTarget, []byte("STALE-CACHE-CONTENT-NOT-A-BUNDLE"), 0o644); err != nil {
+		t.Fatalf("write stale cache: %v", err)
+	}
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode:    "lookup",
+			Sources: []config.HashDBSource{src},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	got := provider.hashDBPasswords(context.Background(), archivePath)
+	if len(got) != 1 || got[0] != "refresh-new-pw" {
+		t.Fatalf("hashDBPasswords = %#v, want [refresh-new-pw] after metadata-less cache refresh", got)
+	}
+	if reqCount := atomic.LoadInt32(&requests); reqCount != 1 {
+		t.Fatalf("HTTP requests = %d, want 1 refresh", reqCount)
+	}
+	metaPath := staleTarget + ".meta.json"
+	if _, err := os.Stat(metaPath); err != nil {
+		t.Fatalf("expected metadata sidecar at %s after refresh: %v", metaPath, err)
+	}
+}
+
+func TestPasswordProviderReusesHashDBBundleCacheWhenMetadataMatches(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-meta-match-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	bundlePath, pubHex := writeSignedBundleForTest(t, dir, archivePath, []string{"meta-match-pw"})
+	bundleData, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected HTTP request to %s — cache with matching metadata should be reused", r.URL.String())
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(dir, "cache")
+	src := config.HashDBSource{
+		Name:      "http-bundle-reuse",
+		URL:       server.URL + "/bundle.json",
+		CacheDir:  cacheDir,
+		PublicKey: pubHex,
+	}
+	cacheRoot, err := hashDBSourceCacheRoot(src)
+	if err != nil {
+		t.Fatalf("hashDBSourceCacheRoot: %v", err)
+	}
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		t.Fatalf("mkdir cacheRoot: %v", err)
+	}
+	cachedTarget := filepath.Join(cacheRoot, "bundle.json")
+	if err := os.WriteFile(cachedTarget, bundleData, 0o644); err != nil {
+		t.Fatalf("write cached payload: %v", err)
+	}
+	meta := map[string]string{
+		"url":               src.URL,
+		"compression":       "",
+		"sha256":            "",
+		"downloaded_sha256": "deadbeef",
+		"cached_at":         "2026-01-01T00:00:00Z",
+	}
+	metaBytes, _ := json.Marshal(meta)
+	if err := os.WriteFile(cachedTarget+".meta.json", metaBytes, 0o644); err != nil {
+		t.Fatalf("write metadata: %v", err)
+	}
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode:    "lookup",
+			Sources: []config.HashDBSource{src},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	got := provider.hashDBPasswords(context.Background(), archivePath)
+	if len(got) != 1 || got[0] != "meta-match-pw" {
+		t.Fatalf("hashDBPasswords = %#v, want [meta-match-pw] from cache reuse", got)
+	}
+}
+
+func TestPasswordProviderRedownloadsHashDBBundleWhenSHA256OptionChanges(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-meta-sha-change-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	bundlePath, pubHex := writeSignedBundleForTest(t, dir, archivePath, []string{"sha-change-pw"})
+	bundleData, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	sum := sha256.Sum256(bundleData)
+	bundleSha := hex.EncodeToString(sum[:])
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		_, _ = w.Write(bundleData)
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(dir, "cache")
+	urlStr := server.URL + "/bundle.json"
+
+	// First call: no SHA256 configured — cache+metadata get written.
+	cfgNoSha := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "sha-change", URL: urlStr, CacheDir: cacheDir, PublicKey: pubHex},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfgNoSha, learned)
+	got := provider.hashDBPasswords(context.Background(), archivePath)
+	if len(got) != 1 || got[0] != "sha-change-pw" {
+		t.Fatalf("first lookup = %#v, want [sha-change-pw]", got)
+	}
+	if r := atomic.LoadInt32(&requests); r != 1 {
+		t.Fatalf("requests after first lookup = %d, want 1", r)
+	}
+
+	// Second call with the same URL but SHA256 set to the bundle's actual sha.
+	// Metadata recorded sha256="" so the new request must not match → refresh.
+	cfgWithSha := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "sha-change", URL: urlStr, CacheDir: cacheDir, PublicKey: pubHex, SHA256: bundleSha},
+			},
+		},
+	}
+	provider2 := newPasswordProvider(archivePath, filepath.Base(archivePath), cfgWithSha, learned)
+	got2 := provider2.hashDBPasswords(context.Background(), archivePath)
+	if len(got2) != 1 || got2[0] != "sha-change-pw" {
+		t.Fatalf("second lookup = %#v, want [sha-change-pw]", got2)
+	}
+	if r := atomic.LoadInt32(&requests); r != 2 {
+		t.Fatalf("requests after sha256 change = %d, want 2", r)
+	}
+
+	// Metadata must now reflect the new sha256 option.
+	src := config.HashDBSource{URL: urlStr, CacheDir: cacheDir}
+	cacheRoot, err := hashDBSourceCacheRoot(src)
+	if err != nil {
+		t.Fatalf("cacheRoot: %v", err)
+	}
+	metaBytes, err := os.ReadFile(filepath.Join(cacheRoot, "bundle.json.meta.json"))
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	var m map[string]string
+	if err := json.Unmarshal(metaBytes, &m); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if m["sha256"] != bundleSha {
+		t.Fatalf("metadata sha256 = %q, want %q", m["sha256"], bundleSha)
+	}
+	if m["url"] != urlStr {
+		t.Fatalf("metadata url = %q, want %q", m["url"], urlStr)
+	}
+}
+
+func TestPasswordProviderKeepsOldHashDBCacheOnRefreshFailure(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-refresh-fail-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(dir, "cache")
+	src := config.HashDBSource{
+		Name:     "refresh-fail",
+		URL:      server.URL + "/bundle.json",
+		CacheDir: cacheDir,
+	}
+	cacheRoot, err := hashDBSourceCacheRoot(src)
+	if err != nil {
+		t.Fatalf("cacheRoot: %v", err)
+	}
+	if err := os.MkdirAll(cacheRoot, 0o755); err != nil {
+		t.Fatalf("mkdir cacheRoot: %v", err)
+	}
+	staleTarget := filepath.Join(cacheRoot, "bundle.json")
+	staleContent := []byte("OLD-BUT-PRESENT-CACHE")
+	if err := os.WriteFile(staleTarget, staleContent, 0o644); err != nil {
+		t.Fatalf("write stale cache: %v", err)
+	}
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode:    "lookup",
+			Sources: []config.HashDBSource{src},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	got := provider.hashDBPasswords(context.Background(), archivePath)
+	if len(got) != 0 {
+		t.Fatalf("hashDBPasswords on refresh failure = %#v, want empty", got)
+	}
+	// Old cache must remain on disk; we never silently use it without metadata
+	// but we also must not delete it just because refresh failed.
+	data, err := os.ReadFile(staleTarget)
+	if err != nil {
+		t.Fatalf("stale cache was unexpectedly removed: %v", err)
+	}
+	if !bytes.Equal(data, staleContent) {
+		t.Fatalf("stale cache mutated on refresh failure: got %q want %q", data, staleContent)
+	}
+}
+
+func TestPasswordProviderCompressedHashDBBundleMetadataRecordsCompressedSHA(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-meta-compressed-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	bundlePath, pubHex := writeSignedBundleForTest(t, dir, archivePath, []string{"meta-compressed-pw"})
+	bundleData, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	compressed := gzipBytes(t, bundleData)
+	sum := sha256.Sum256(compressed)
+	compressedSha := hex.EncodeToString(sum[:])
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(compressed)
+	}))
+	defer server.Close()
+
+	cacheDir := filepath.Join(dir, "cache")
+	src := config.HashDBSource{
+		Name:        "meta-compressed",
+		URL:         server.URL + "/bundle.json.gz",
+		CacheDir:    cacheDir,
+		PublicKey:   pubHex,
+		Compression: "gzip",
+		SHA256:      compressedSha,
+	}
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode:    "lookup",
+			Sources: []config.HashDBSource{src},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	if got := provider.hashDBPasswords(context.Background(), archivePath); len(got) != 1 || got[0] != "meta-compressed-pw" {
+		t.Fatalf("hashDBPasswords = %#v, want [meta-compressed-pw]", got)
+	}
+
+	cacheRoot, err := hashDBSourceCacheRoot(src)
+	if err != nil {
+		t.Fatalf("cacheRoot: %v", err)
+	}
+	metaBytes, err := os.ReadFile(filepath.Join(cacheRoot, "bundle.json.meta.json"))
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	var m map[string]string
+	if err := json.Unmarshal(metaBytes, &m); err != nil {
+		t.Fatalf("unmarshal metadata: %v", err)
+	}
+	if m["compression"] != "gzip" {
+		t.Fatalf("metadata compression = %q, want %q", m["compression"], "gzip")
+	}
+	if m["downloaded_sha256"] != compressedSha {
+		t.Fatalf("metadata downloaded_sha256 = %q, want %q (compressed bytes sha)", m["downloaded_sha256"], compressedSha)
+	}
+	if m["sha256"] != compressedSha {
+		t.Fatalf("metadata sha256 = %q, want %q", m["sha256"], compressedSha)
+	}
+	if m["url"] != src.URL {
+		t.Fatalf("metadata url = %q, want %q", m["url"], src.URL)
+	}
+	if m["cached_at"] == "" {
+		t.Fatalf("metadata cached_at is empty")
 	}
 }
 
