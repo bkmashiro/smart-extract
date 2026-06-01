@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,9 @@ func newTestDeps() (runDeps, *bytes.Buffer, *bytes.Buffer) {
 		allocConsole:    func() {},
 		waitForKeypress: func(string) {},
 		extract: func(path string, opts cmd.ExtractOptions) error {
+			return nil
+		},
+		explain: func(path string, w io.Writer) error {
 			return nil
 		},
 	}
@@ -283,6 +288,44 @@ func TestRunDebugLogWritesToFileAndPassesLoggerToExtraction(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), logPath) {
 		t.Fatalf("stdout should mention debug log path, got: %q", stdout.String())
+	}
+}
+
+func TestRunExplainDispatchesToExplainHook(t *testing.T) {
+	setupTempConfig(t)
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "password=secret.zip")
+	if err := os.WriteFile(archivePath, []byte("fake"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	deps, stdout, stderr := newTestDeps()
+	var gotPath string
+	deps.explain = func(path string, w io.Writer) error {
+		gotPath = path
+		_, _ = fmt.Fprintln(w, "explain-ok")
+		return nil
+	}
+
+	if code := run([]string{"--explain", archivePath}, deps); code != 0 {
+		t.Fatalf("exit code=%d stderr=%s", code, stderr.String())
+	}
+	if gotPath != archivePath {
+		t.Fatalf("explain path=%q, want %q", gotPath, archivePath)
+	}
+	if !strings.Contains(stdout.String(), "explain-ok") {
+		t.Fatalf("stdout missing explain output: %q", stdout.String())
+	}
+}
+
+func TestRunExplainMissingArgReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+	deps, _, stderr := newTestDeps()
+	if code := run([]string{"--explain"}, deps); code == 0 {
+		t.Fatalf("expected non-zero exit")
+	}
+	if !strings.Contains(stderr.String(), "--explain") {
+		t.Fatalf("expected usage in stderr, got %q", stderr.String())
 	}
 }
 

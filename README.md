@@ -51,6 +51,7 @@ smart-extract.exe --install     Install right-click menu
 smart-extract.exe --uninstall   Remove right-click menu
 smart-extract.exe --hashdb-public-key ./hashdb/private/signing.key.json
 smart-extract.exe --debug-log .\smart-extract-debug.log <archive>
+smart-extract.exe --explain <archive>
 smart-extract.exe <archive>     Extract an archive (called by Explorer)
 ```
 
@@ -195,6 +196,19 @@ etc.), active/disabled HashDB source lookups, cache/download errors surfaced by
 those lookups, and success/failure markers. It intentionally logs counts and
 source labels rather than plaintext password values; filename-style password
 hints such as `password=...` / `pwd-...` / `密码...` are redacted in log lines.
+
+For a safer dry-run style diagnosis that does not extract, prompt, learn,
+contribute, or delete files, use:
+
+```powershell
+smart-extract.exe --explain .\archive.zip
+```
+
+`--explain` prints the budget profile, candidate limit, total candidate count,
+candidate counts by source, and configured HashDB source status. It follows the
+same top-level candidate construction path as extraction, including optional
+HashDB lookup when `hashdb.mode: lookup` is configured, but it never prints raw
+candidate password values.
 
 ### Local learning store
 

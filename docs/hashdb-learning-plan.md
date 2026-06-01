@@ -230,6 +230,8 @@ Source and cache management is implemented: `--hashdb-list-sources` prints each 
 
 Debug observability is implemented via `--debug-log <log.txt> <archive> [archive...]`. The log records extraction progress, candidate source counts, budget profile/limits, HashDB source skip/lookup/error summaries, and success/failure markers while avoiding plaintext password values and redacting filename password hints such as `password=...`, `pwd-...`, and `密码...`.
 
+Dry-run diagnostics are implemented via `--explain <archive>`. It reports budget profile, candidate limit, total candidate count, candidate counts by source, and configured HashDB source status without extracting, prompting, deleting archives, writing learning observations, or appending HashDB contributions. It does not print raw candidate password values.
+
 ## Remaining Work
 
 - Optional zstd/IPFS/torrent-like snapshot distribution later; gzip-compressed static HTTP bundles/shards are implemented.
