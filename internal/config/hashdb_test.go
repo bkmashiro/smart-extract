@@ -190,6 +190,44 @@ func TestLoadConfigHashDBContributionShardedParses(t *testing.T) {
 	}
 }
 
+func TestLoadConfigHashDBHTTPSourceParses(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte(`hashdb:
+  mode: lookup
+  sources:
+    - name: remote-bundle
+      type: bundle
+      url: https://example.invalid/hashdb/bundle.json
+      cache_dir: /tmp/hashdb-cache
+      public_key: aa
+    - name: remote-sharded
+      type: sharded
+      manifest_url: https://example.invalid/hashdb/manifest.json
+      cache_dir: /tmp/hashdb-cache
+      public_key: bb
+`)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(c.HashDB.Sources) != 2 {
+		t.Fatalf("len(Sources) = %d, want 2", len(c.HashDB.Sources))
+	}
+	s0 := c.HashDB.Sources[0]
+	if s0.URL != "https://example.invalid/hashdb/bundle.json" || s0.CacheDir != "/tmp/hashdb-cache" || s0.PublicKey != "aa" {
+		t.Fatalf("source[0] = %+v", s0)
+	}
+	s1 := c.HashDB.Sources[1]
+	if s1.ManifestURL != "https://example.invalid/hashdb/manifest.json" || s1.CacheDir != "/tmp/hashdb-cache" || s1.PublicKey != "bb" {
+		t.Fatalf("source[1] = %+v", s1)
+	}
+}
+
 func TestLoadConfigHashDBShardedSourceParses(t *testing.T) {
 	dir := setupTestDir(t)
 

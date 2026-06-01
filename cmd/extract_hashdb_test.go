@@ -5,8 +5,11 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/bkmashiro/smart-extract/internal/config"
@@ -119,6 +122,57 @@ func TestPasswordProviderUsesHashDBWhenSQLiteCandidateSourceUnavailable(t *testi
 	}
 	if !containsString(got, "hashdb-legacy-found") {
 		t.Fatalf("expected candidates to contain hashdb-legacy-found, got %#v", got)
+	}
+}
+
+func TestPasswordProviderDownloadsAndCachesHTTPHashDBBundle(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-http-bundle-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	bundlePath, pubHex := writeSignedBundleForTest(t, dir, archivePath, []string{"hashdb-http-found"})
+	bundleData, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(bundleData)
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "http-bundle", URL: server.URL + "/bundle.json", CacheDir: filepath.Join(dir, "cache"), PublicKey: pubHex},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	for i := 0; i < 2; i++ {
+		got := provider.hashDBPasswords(context.Background(), archivePath)
+		if len(got) != 1 || got[0] != "hashdb-http-found" {
+			t.Fatalf("lookup %d hashDBPasswords = %#v, want [hashdb-http-found]", i+1, got)
+		}
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("HTTP bundle requests = %d, want 1 cached download", got)
+	}
+	cached, err := filepath.Glob(filepath.Join(dir, "cache", "*", "bundle.json"))
+	if err != nil || len(cached) != 1 {
+		t.Fatalf("expected one cached bundle file, got %v err=%v", cached, err)
 	}
 }
 
@@ -280,6 +334,73 @@ func TestPasswordProviderUsesShardedHashDBSource(t *testing.T) {
 	}
 	if idxShard < 0 || idxFallback < 0 || idxShard >= idxFallback {
 		t.Fatalf("expected sharded-found before fallback-pass; got %#v (idxShard=%d idxFallback=%d)", got, idxShard, idxFallback)
+	}
+}
+
+func TestPasswordProviderDownloadsOnlyMatchingHTTPHashDBShard(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-http-sharded-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	shardBase := filepath.Join(dir, "sharded-src")
+	if err := os.MkdirAll(shardBase, 0o755); err != nil {
+		t.Fatalf("mkdir sharded source: %v", err)
+	}
+	_, pubHex := writeShardedSourceForTest(t, shardBase, archivePath, []string{"http-sharded-found"})
+	manifestData, err := os.ReadFile(filepath.Join(shardBase, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifestRequests, shardRequests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/manifest.json":
+			atomic.AddInt32(&manifestRequests, 1)
+			_, _ = w.Write(manifestData)
+		default:
+			atomic.AddInt32(&shardRequests, 1)
+			http.ServeFile(w, r, filepath.Join(shardBase, r.URL.Path))
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "http-sharded", Type: "sharded", ManifestURL: server.URL + "/manifest.json", CacheDir: filepath.Join(dir, "cache"), PublicKey: pubHex},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	for i := 0; i < 2; i++ {
+		got := provider.hashDBPasswords(context.Background(), archivePath)
+		if len(got) != 1 || got[0] != "http-sharded-found" {
+			t.Fatalf("lookup %d hashDBPasswords = %#v, want [http-sharded-found]", i+1, got)
+		}
+	}
+	if got := atomic.LoadInt32(&manifestRequests); got != 1 {
+		t.Fatalf("manifest requests = %d, want 1 cached download", got)
+	}
+	if got := atomic.LoadInt32(&shardRequests); got != 1 {
+		t.Fatalf("shard requests = %d, want 1 cached download", got)
+	}
+	cachedManifest, err := filepath.Glob(filepath.Join(dir, "cache", "*", "manifest.json"))
+	if err != nil || len(cachedManifest) != 1 {
+		t.Fatalf("expected one cached manifest, got %v err=%v", cachedManifest, err)
+	}
+	cachedShards, err := filepath.Glob(filepath.Join(dir, "cache", "*", "shards", "*.json"))
+	if err != nil || len(cachedShards) != 1 {
+		t.Fatalf("expected one cached matching shard, got %v err=%v", cachedShards, err)
 	}
 }
 

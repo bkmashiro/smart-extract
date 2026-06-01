@@ -131,7 +131,7 @@
 
 ---
 
-## Phase 6: Decentralized HashDB Sources — **Implemented for local file sources**
+## Phase 6: Decentralized HashDB Sources — **Implemented for local file and static HTTP sources**
 
 **Objective:** Add optional signed static sources that can be hosted anywhere.
 
@@ -144,6 +144,8 @@
 **Source model:**
 - Single-file signed bundles are supported for small/private sources.
 - `manifest.json` + signed shard files are supported for sharded file sources.
+- Static `http://`/`https://` bundle URLs are downloaded once into a local cache before lookup.
+- Static sharded `manifest_url` sources cache the manifest plus only the matching shard for the archive record-id prefix.
 - Shards are addressed by record-id prefix.
 - Client validates source Ed25519 signatures and shard hashes.
 - Query loads only the matching local shard rather than the whole source.
@@ -196,6 +198,16 @@ hashdb:
       type: sharded
       base_dir: ./hashdb/private
       public_key: "<hex ed25519 public key>"
+    - name: mirror-bundle
+      type: bundle
+      url: https://example.com/hashdb/private.bundle.json
+      cache_dir: ./hashdb/cache
+      public_key: "<hex ed25519 public key>"
+    - name: mirror-shards
+      type: sharded
+      manifest_url: https://example.com/hashdb/manifest.json
+      cache_dir: ./hashdb/cache
+      public_key: "<hex ed25519 public key>"
 
   contribute: auto              # off | auto; ask is reserved and treated as off
   contribution:
@@ -213,10 +225,8 @@ Successful top-level and nested extractions go through the same success callback
 
 ## Remaining Work
 
-- HTTP/static source reader and content-addressed cache for subscribed sources.
 - `ask` contribution mode UI; currently parsed but intentionally treated as off.
-- Convenience tooling to print/export the contribution signing public key and optionally add it as a lookup source.
-- Legacy `learned.yaml` dependency cleanup: keep migration compatibility, but make SQLite the only normal write/read path.
+- Convenience tooling to optionally add/export local contribution sources automatically.
 - Cross-process throttling/semaphore for Explorer multi-select and heavy L2 probes.
 - Optional source compression and mirror distribution (zstd/IPFS/torrent-like snapshots later).
 

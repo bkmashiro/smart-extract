@@ -63,8 +63,11 @@ type HashDBSource struct {
 	Name         string `yaml:"name,omitempty"`
 	Type         string `yaml:"type,omitempty"`
 	Path         string `yaml:"path,omitempty"`
+	URL          string `yaml:"url,omitempty"`
 	BaseDir      string `yaml:"base_dir,omitempty"`
 	ManifestPath string `yaml:"manifest_path,omitempty"`
+	ManifestURL  string `yaml:"manifest_url,omitempty"`
+	CacheDir     string `yaml:"cache_dir,omitempty"`
 	PublicKey    string `yaml:"public_key,omitempty"`
 	// Disabled, when true, suppresses lookups against this source.
 	// Defaults to false so a configured source is enabled by default.

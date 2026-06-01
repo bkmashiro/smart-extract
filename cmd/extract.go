@@ -2,12 +2,18 @@ package cmd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bkmashiro/smart-extract/internal/budget"
 	"github.com/bkmashiro/smart-extract/internal/candidates"
@@ -532,24 +538,185 @@ func (p *passwordProvider) hashDBPasswords(ctx context.Context, archivePath stri
 }
 
 func (p *passwordProvider) lookupHashDBSource(ctx context.Context, src config.HashDBSource, archivePath string) ([]string, error) {
-	sourceType := strings.ToLower(strings.TrimSpace(src.Type))
+	prepared, err := p.prepareHashDBSource(ctx, src, archivePath)
+	if err != nil {
+		return nil, err
+	}
+	sourceType := strings.ToLower(strings.TrimSpace(prepared.Type))
 	switch sourceType {
 	case "", "bundle":
 		return hashdb.LookupFileSource(ctx, hashdb.FileSource{
-			Name:      src.Name,
-			Path:      src.Path,
-			PublicKey: src.PublicKey,
+			Name:      prepared.Name,
+			Path:      prepared.Path,
+			PublicKey: prepared.PublicKey,
 		}, archivePath)
 	case "sharded":
 		return hashdb.LookupShardedFileSource(ctx, hashdb.ShardedFileSource{
-			Name:         src.Name,
-			BaseDir:      src.BaseDir,
-			ManifestPath: src.ManifestPath,
-			PublicKey:    src.PublicKey,
+			Name:         prepared.Name,
+			BaseDir:      prepared.BaseDir,
+			ManifestPath: prepared.ManifestPath,
+			PublicKey:    prepared.PublicKey,
 		}, archivePath)
 	default:
-		return nil, fmt.Errorf("unsupported source type %q", src.Type)
+		return nil, fmt.Errorf("unsupported source type %q", prepared.Type)
 	}
+}
+
+func (p *passwordProvider) prepareHashDBSource(ctx context.Context, src config.HashDBSource, archivePath string) (config.HashDBSource, error) {
+	sourceType := strings.ToLower(strings.TrimSpace(src.Type))
+	if (sourceType == "" || sourceType == "bundle") && strings.TrimSpace(src.Path) == "" && strings.TrimSpace(src.URL) != "" {
+		cachedPath, err := cachedHashDBDownload(ctx, src, src.URL, "bundle.json")
+		if err != nil {
+			return src, err
+		}
+		src.Path = cachedPath
+	}
+	if sourceType == "sharded" && strings.TrimSpace(src.ManifestPath) == "" && strings.TrimSpace(src.ManifestURL) != "" {
+		cacheRoot, err := hashDBSourceCacheRoot(src)
+		if err != nil {
+			return src, err
+		}
+		manifestPath, err := cachedHashDBDownloadTo(ctx, src.ManifestURL, filepath.Join(cacheRoot, "manifest.json"))
+		if err != nil {
+			return src, err
+		}
+		manifestData, err := os.ReadFile(manifestPath)
+		if err != nil {
+			return src, fmt.Errorf("hashdb sharded source cache: read manifest: %w", err)
+		}
+		manifest, err := hashdb.ParseManifest(manifestData)
+		if err != nil {
+			return src, fmt.Errorf("hashdb sharded source cache: parse manifest: %w", err)
+		}
+		prefix, err := hashDBShardPrefixForArchive(archivePath, manifest.ShardPrefixLength)
+		if err != nil {
+			return src, err
+		}
+		if shard, ok := manifest.Shards[prefix]; ok {
+			shardURL, err := resolveHashDBURL(src.ManifestURL, shard.Path)
+			if err != nil {
+				return src, err
+			}
+			if _, err := cachedHashDBDownloadTo(ctx, shardURL, filepath.Join(cacheRoot, shard.Path)); err != nil {
+				return src, err
+			}
+		}
+		src.BaseDir = cacheRoot
+		src.ManifestPath = manifestPath
+	}
+	return src, nil
+}
+
+func hashDBShardPrefixForArchive(archivePath string, prefixLen int) (string, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("hashdb sharded source cache: open archive: %w", err)
+	}
+	defer f.Close()
+	digest := hashdb.ArchiveHash(f)
+	recordIDHex := hashdb.RecordID(digest).Hex()
+	if len(recordIDHex) < prefixLen {
+		return "", fmt.Errorf("hashdb sharded source cache: record_id shorter than prefix length")
+	}
+	return strings.ToLower(recordIDHex[:prefixLen]), nil
+}
+
+func cachedHashDBDownload(ctx context.Context, src config.HashDBSource, rawURL, filename string) (string, error) {
+	cacheRoot, err := hashDBSourceCacheRoot(src)
+	if err != nil {
+		return "", err
+	}
+	return cachedHashDBDownloadTo(ctx, rawURL, filepath.Join(cacheRoot, filename))
+}
+
+func hashDBSourceCacheRoot(src config.HashDBSource) (string, error) {
+	root := strings.TrimSpace(src.CacheDir)
+	if root == "" {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("hashdb source cache: resolve user cache dir: %w", err)
+		}
+		root = filepath.Join(base, "smart-extract", "hashdb")
+	}
+	idInput := src.URL
+	if idInput == "" {
+		idInput = src.ManifestURL
+	}
+	if idInput == "" {
+		idInput = src.Name
+	}
+	sum := sha256.Sum256([]byte(idInput))
+	return filepath.Join(root, hex.EncodeToString(sum[:8])), nil
+}
+
+func cachedHashDBDownloadTo(ctx context.Context, rawURL, targetPath string) (string, error) {
+	if strings.TrimSpace(rawURL) == "" {
+		return "", fmt.Errorf("hashdb source cache: empty url")
+	}
+	if _, err := os.Stat(targetPath); err == nil {
+		return targetPath, nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("hashdb source cache: stat %s: %w", targetPath, err)
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("hashdb source cache: parse url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("hashdb source cache: unsupported url scheme %q", parsed.Scheme)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("hashdb source cache: build request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("hashdb source cache: download %s: %w", rawURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("hashdb source cache: download %s: status %s", rawURL, resp.Status)
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return "", fmt.Errorf("hashdb source cache: mkdir: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(targetPath), ".download-*.tmp")
+	if err != nil {
+		return "", fmt.Errorf("hashdb source cache: create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	limited := io.LimitReader(resp.Body, 64<<20+1)
+	written, err := io.Copy(tmp, limited)
+	if err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("hashdb source cache: write temp: %w", err)
+	}
+	if written > 64<<20 {
+		_ = tmp.Close()
+		return "", fmt.Errorf("hashdb source cache: response too large (limit 64 MiB)")
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("hashdb source cache: close temp: %w", err)
+	}
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		return "", fmt.Errorf("hashdb source cache: install cache file: %w", err)
+	}
+	return targetPath, nil
+}
+
+func resolveHashDBURL(baseURL, relPath string) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("hashdb source cache: parse manifest url: %w", err)
+	}
+	ref, err := url.Parse(relPath)
+	if err != nil {
+		return "", fmt.Errorf("hashdb source cache: parse shard url: %w", err)
+	}
+	return base.ResolveReference(ref).String(), nil
 }
 
 func hashDBSourceLabel(src config.HashDBSource) string {
@@ -559,8 +726,14 @@ func hashDBSourceLabel(src config.HashDBSource) string {
 	if src.Path != "" {
 		return src.Path
 	}
+	if src.URL != "" {
+		return src.URL
+	}
 	if src.ManifestPath != "" {
 		return src.ManifestPath
+	}
+	if src.ManifestURL != "" {
+		return src.ManifestURL
 	}
 	if src.BaseDir != "" {
 		return src.BaseDir

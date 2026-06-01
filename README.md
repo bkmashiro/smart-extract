@@ -96,6 +96,29 @@ hashdb:
       public_key: "<hex ed25519 public key>"
 ```
 
+#### HashDB lookup from static HTTP sources with local cache
+
+Network lookup is still opt-in: set `hashdb.mode: lookup` and configure an
+HTTP/HTTPS source. The first lookup downloads the signed bundle, or the sharded
+manifest plus only the matching shard, into `cache_dir`; later lookups reuse the
+cached files.
+
+```yaml
+hashdb:
+  mode: lookup
+  sources:
+    - name: mirror-bundle
+      type: bundle
+      url: https://example.com/hashdb/shared.bundle.json
+      cache_dir: ./hashdb/cache
+      public_key: "<hex ed25519 public key>"
+    - name: mirror-shards
+      type: sharded
+      manifest_url: https://example.com/hashdb/manifest.json
+      cache_dir: ./hashdb/cache
+      public_key: "<hex ed25519 public key>"
+```
+
 #### Auto-contribute successful extractions to a private local sharded source
 
 ```yaml
