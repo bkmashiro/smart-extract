@@ -192,6 +192,52 @@ func TestParseManifestRejectsShardKeyWrongLength(t *testing.T) {
 	}
 }
 
+func TestParseManifestRoundTripWithShardCompression(t *testing.T) {
+	m := Manifest{
+		Version:           ManifestVersion,
+		Source:            "src",
+		ShardPrefixLength: 2,
+		Shards: map[string]ShardInfo{
+			"ab": {Path: "shards/ab.json.gz", SHA256: strings.Repeat("bb", 32), Count: 1, Compression: "gzip"},
+		},
+	}
+	data, err := MarshalManifest(m)
+	if err != nil {
+		t.Fatalf("MarshalManifest: %v", err)
+	}
+	got, err := ParseManifest(data)
+	if err != nil {
+		t.Fatalf("ParseManifest: %v", err)
+	}
+	if got.Shards["ab"].Compression != "gzip" {
+		t.Fatalf("Compression = %q, want gzip", got.Shards["ab"].Compression)
+	}
+	if got.Shards["ab"].Path != "shards/ab.json.gz" {
+		t.Fatalf("Path = %q", got.Shards["ab"].Path)
+	}
+}
+
+func TestParseManifestAcceptsLegacyShardWithoutCompression(t *testing.T) {
+	data, _ := json.Marshal(map[string]any{
+		"version":             ManifestVersion,
+		"shard_prefix_length": 2,
+		"shards": map[string]any{
+			"ab": map[string]any{
+				"path":   "shards/ab.json",
+				"sha256": strings.Repeat("00", 32),
+				"count":  2,
+			},
+		},
+	})
+	got, err := ParseManifest(data)
+	if err != nil {
+		t.Fatalf("ParseManifest legacy: %v", err)
+	}
+	if got.Shards["ab"].Compression != "" {
+		t.Fatalf("legacy Compression = %q, want empty", got.Shards["ab"].Compression)
+	}
+}
+
 func TestParseManifestRejectsNonHexShardKey(t *testing.T) {
 	data, _ := json.Marshal(map[string]any{
 		"version":             ManifestVersion,

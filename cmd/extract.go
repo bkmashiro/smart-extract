@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -569,7 +571,10 @@ func (p *passwordProvider) lookupHashDBSource(ctx context.Context, src config.Ha
 func (p *passwordProvider) prepareHashDBSource(ctx context.Context, src config.HashDBSource, archivePath string) (config.HashDBSource, error) {
 	sourceType := strings.ToLower(strings.TrimSpace(src.Type))
 	if (sourceType == "" || sourceType == "bundle") && strings.TrimSpace(src.Path) == "" && strings.TrimSpace(src.URL) != "" {
-		cachedPath, err := cachedHashDBDownload(ctx, src, src.URL, "bundle.json")
+		cachedPath, err := cachedHashDBDownload(ctx, src, src.URL, "bundle.json", cachedHashDBDownloadOptions{
+			Compression: src.Compression,
+			SHA256:      src.SHA256,
+		})
 		if err != nil {
 			return src, err
 		}
@@ -580,7 +585,7 @@ func (p *passwordProvider) prepareHashDBSource(ctx context.Context, src config.H
 		if err != nil {
 			return src, err
 		}
-		manifestPath, err := cachedHashDBDownloadTo(ctx, src.ManifestURL, filepath.Join(cacheRoot, "manifest.json"))
+		manifestPath, err := cachedHashDBDownloadTo(ctx, src.ManifestURL, filepath.Join(cacheRoot, "manifest.json"), cachedHashDBDownloadOptions{})
 		if err != nil {
 			return src, err
 		}
@@ -601,7 +606,10 @@ func (p *passwordProvider) prepareHashDBSource(ctx context.Context, src config.H
 			if err != nil {
 				return src, err
 			}
-			if _, err := cachedHashDBDownloadTo(ctx, shardURL, filepath.Join(cacheRoot, shard.Path)); err != nil {
+			if _, err := cachedHashDBDownloadTo(ctx, shardURL, filepath.Join(cacheRoot, shard.Path), cachedHashDBDownloadOptions{
+				Compression: shard.Compression,
+				SHA256:      shard.SHA256,
+			}); err != nil {
 				return src, err
 			}
 		}
@@ -625,12 +633,24 @@ func hashDBShardPrefixForArchive(archivePath string, prefixLen int) (string, err
 	return strings.ToLower(recordIDHex[:prefixLen]), nil
 }
 
-func cachedHashDBDownload(ctx context.Context, src config.HashDBSource, rawURL, filename string) (string, error) {
+func cachedHashDBDownload(ctx context.Context, src config.HashDBSource, rawURL, filename string, opts cachedHashDBDownloadOptions) (string, error) {
 	cacheRoot, err := hashDBSourceCacheRoot(src)
 	if err != nil {
 		return "", err
 	}
-	return cachedHashDBDownloadTo(ctx, rawURL, filepath.Join(cacheRoot, filename))
+	return cachedHashDBDownloadTo(ctx, rawURL, filepath.Join(cacheRoot, filename), opts)
+}
+
+// cachedHashDBDownloadOptions configures optional integrity and decompression
+// behaviors for the static HTTP HashDB cache helper.
+type cachedHashDBDownloadOptions struct {
+	// Compression, when non-empty, names the codec used for the downloaded
+	// bytes. Currently only "gzip" is supported.
+	Compression string
+	// SHA256, when non-empty, is the expected lowercase hex SHA-256 over the
+	// raw downloaded bytes (i.e. the compressed payload when Compression is
+	// set). Verified before installing the cache file.
+	SHA256 string
 }
 
 func hashDBSourceCacheRoot(src config.HashDBSource) (string, error) {
@@ -653,9 +673,24 @@ func hashDBSourceCacheRoot(src config.HashDBSource) (string, error) {
 	return filepath.Join(root, hex.EncodeToString(sum[:8])), nil
 }
 
-func cachedHashDBDownloadTo(ctx context.Context, rawURL, targetPath string) (string, error) {
+const hashDBCacheMaxBytes = 64 << 20
+
+func cachedHashDBDownloadTo(ctx context.Context, rawURL, targetPath string, opts cachedHashDBDownloadOptions) (string, error) {
 	if strings.TrimSpace(rawURL) == "" {
 		return "", fmt.Errorf("hashdb source cache: empty url")
+	}
+	compression := strings.ToLower(strings.TrimSpace(opts.Compression))
+	switch compression {
+	case "", "gzip":
+		// supported
+	default:
+		return "", fmt.Errorf("hashdb source cache: unsupported compression %q (supported: gzip)", opts.Compression)
+	}
+	if opts.SHA256 != "" {
+		raw, err := hex.DecodeString(strings.ToLower(strings.TrimSpace(opts.SHA256)))
+		if err != nil || len(raw) != sha256.Size {
+			return "", fmt.Errorf("hashdb source cache: malformed sha256 %q", opts.SHA256)
+		}
 	}
 	if _, err := os.Stat(targetPath); err == nil {
 		return targetPath, nil
@@ -683,6 +718,42 @@ func cachedHashDBDownloadTo(ctx context.Context, rawURL, targetPath string) (str
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("hashdb source cache: download %s: status %s", rawURL, resp.Status)
 	}
+
+	limited := io.LimitReader(resp.Body, int64(hashDBCacheMaxBytes)+1)
+	downloaded, err := io.ReadAll(limited)
+	if err != nil {
+		return "", fmt.Errorf("hashdb source cache: read body: %w", err)
+	}
+	if len(downloaded) > hashDBCacheMaxBytes {
+		return "", fmt.Errorf("hashdb source cache: response too large (limit 64 MiB)")
+	}
+
+	if opts.SHA256 != "" {
+		sum := sha256.Sum256(downloaded)
+		gotHex := hex.EncodeToString(sum[:])
+		wantHex := strings.ToLower(strings.TrimSpace(opts.SHA256))
+		if gotHex != wantHex {
+			return "", fmt.Errorf("hashdb source cache: sha256 mismatch for %s: got %s, want %s", rawURL, gotHex, wantHex)
+		}
+	}
+
+	payload := downloaded
+	if compression == "gzip" {
+		gz, err := gzip.NewReader(bytes.NewReader(downloaded))
+		if err != nil {
+			return "", fmt.Errorf("hashdb source cache: gzip reader for %s: %w", rawURL, err)
+		}
+		defer gz.Close()
+		decompressed, err := io.ReadAll(io.LimitReader(gz, int64(hashDBCacheMaxBytes)+1))
+		if err != nil {
+			return "", fmt.Errorf("hashdb source cache: gunzip %s: %w", rawURL, err)
+		}
+		if len(decompressed) > hashDBCacheMaxBytes {
+			return "", fmt.Errorf("hashdb source cache: decompressed payload too large (limit 64 MiB)")
+		}
+		payload = decompressed
+	}
+
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
 		return "", fmt.Errorf("hashdb source cache: mkdir: %w", err)
 	}
@@ -692,15 +763,9 @@ func cachedHashDBDownloadTo(ctx context.Context, rawURL, targetPath string) (str
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
-	limited := io.LimitReader(resp.Body, 64<<20+1)
-	written, err := io.Copy(tmp, limited)
-	if err != nil {
+	if _, err := tmp.Write(payload); err != nil {
 		_ = tmp.Close()
 		return "", fmt.Errorf("hashdb source cache: write temp: %w", err)
-	}
-	if written > 64<<20 {
-		_ = tmp.Close()
-		return "", fmt.Errorf("hashdb source cache: response too large (limit 64 MiB)")
 	}
 	if err := tmp.Close(); err != nil {
 		return "", fmt.Errorf("hashdb source cache: close temp: %w", err)

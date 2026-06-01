@@ -103,7 +103,11 @@ hashdb:
 Network lookup is still opt-in: set `hashdb.mode: lookup` and configure an
 HTTP/HTTPS source. The first lookup downloads the signed bundle, or the sharded
 manifest plus only the matching shard, into `cache_dir`; later lookups reuse the
-cached files.
+cached files. Bundle URLs can optionally declare `compression: gzip` and
+`sha256`; the checksum is verified over the downloaded bytes before the
+decompressed canonical bundle is cached. Sharded manifests can also mark an
+individual shard with `"compression":"gzip"`; the shard checksum covers the
+compressed mirror bytes, and the cache stores the decompressed signed shard.
 
 ```yaml
 hashdb:
@@ -111,7 +115,9 @@ hashdb:
   sources:
     - name: mirror-bundle
       type: bundle
-      url: https://example.com/hashdb/shared.bundle.json
+      url: https://example.com/hashdb/shared.bundle.json.gz
+      compression: gzip
+      sha256: "<hex sha256 of downloaded .gz bytes>"
       cache_dir: ./hashdb/cache
       public_key: "<hex ed25519 public key>"
     - name: mirror-shards

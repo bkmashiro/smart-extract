@@ -200,7 +200,9 @@ hashdb:
       public_key: "<hex ed25519 public key>"
     - name: mirror-bundle
       type: bundle
-      url: https://example.com/hashdb/private.bundle.json
+      url: https://example.com/hashdb/private.bundle.json.gz
+      compression: gzip
+      sha256: "<hex sha256 of downloaded .gz bytes>"
       cache_dir: ./hashdb/cache
       public_key: "<hex ed25519 public key>"
     - name: mirror-shards
@@ -221,12 +223,14 @@ hashdb:
 
 Successful top-level and nested extractions go through the same success callback. When `contribute: auto` is configured, the callback appends an encrypted archive-bound record to the configured local sink. Contribution failures are warnings only; extraction and local SQLite learning still succeed.
 
+Static HTTP mirror sources may serve gzip-compressed bundles or shards. Bundle sources use `compression: gzip` and optional `sha256` in `hashdb.sources[]`; sharded manifests put `compression: "gzip"` on individual shards and keep `sha256` bound to the compressed mirror bytes. The local cache stores decompressed canonical signed bundle/shard files for lookup.
+
 ---
 
 ## Remaining Work
 
 - `ask` contribution mode UI; currently parsed but intentionally treated as off.
-- Optional source compression and mirror distribution (zstd/IPFS/torrent-like snapshots later).
+- Optional zstd/IPFS/torrent-like snapshot distribution later; gzip-compressed static HTTP bundles/shards are implemented.
 
 ---
 

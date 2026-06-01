@@ -228,6 +228,43 @@ func TestLoadConfigHashDBHTTPSourceParses(t *testing.T) {
 	}
 }
 
+func TestLoadConfigHashDBHTTPSourceCompressionAndSHA256(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte(`hashdb:
+  mode: lookup
+  sources:
+    - name: remote-compressed
+      type: bundle
+      url: https://example.invalid/hashdb/bundle.json.gz
+      compression: gzip
+      sha256: deadbeefcafebabe
+      cache_dir: /tmp/hashdb-cache
+      public_key: aa
+`)
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0o644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(c.HashDB.Sources) != 1 {
+		t.Fatalf("len(Sources) = %d, want 1", len(c.HashDB.Sources))
+	}
+	s0 := c.HashDB.Sources[0]
+	if s0.Compression != "gzip" {
+		t.Fatalf("source[0].Compression = %q, want gzip", s0.Compression)
+	}
+	if s0.SHA256 != "deadbeefcafebabe" {
+		t.Fatalf("source[0].SHA256 = %q, want deadbeefcafebabe", s0.SHA256)
+	}
+	if s0.URL != "https://example.invalid/hashdb/bundle.json.gz" {
+		t.Fatalf("source[0].URL = %q", s0.URL)
+	}
+}
+
 func TestLoadConfigHashDBShardedSourceParses(t *testing.T) {
 	dir := setupTestDir(t)
 

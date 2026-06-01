@@ -1,10 +1,14 @@
 package cmd
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -560,5 +564,244 @@ func TestPasswordProviderHashDBFailureDoesNotAbort(t *testing.T) {
 	}
 	if !containsString(got, "fallback-pass") {
 		t.Fatalf("expected fallback to remain when HashDB source fails, got %#v", got)
+	}
+}
+
+// gzipBytes returns gzip(src) using stdlib compress/gzip.
+func gzipBytes(t *testing.T, src []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(src); err != nil {
+		t.Fatalf("gzip write: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestPasswordProviderDownloadsAndCachesCompressedHTTPHashDBBundle(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-compressed-bundle-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	bundlePath, pubHex := writeSignedBundleForTest(t, dir, archivePath, []string{"hashdb-compressed-found"})
+	bundleData, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+	compressed := gzipBytes(t, bundleData)
+	sum := sha256.Sum256(compressed)
+	compressedSha := hex.EncodeToString(sum[:])
+
+	var requests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requests, 1)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(compressed)
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{
+					Name:        "compressed-bundle",
+					URL:         server.URL + "/bundle.json.gz",
+					CacheDir:    filepath.Join(dir, "cache"),
+					PublicKey:   pubHex,
+					Compression: "gzip",
+					SHA256:      compressedSha,
+				},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	for i := 0; i < 2; i++ {
+		got := provider.hashDBPasswords(context.Background(), archivePath)
+		if len(got) != 1 || got[0] != "hashdb-compressed-found" {
+			t.Fatalf("lookup %d hashDBPasswords = %#v, want [hashdb-compressed-found]", i+1, got)
+		}
+	}
+	if got := atomic.LoadInt32(&requests); got != 1 {
+		t.Fatalf("HTTP bundle requests = %d, want 1 cached download", got)
+	}
+	cached, err := filepath.Glob(filepath.Join(dir, "cache", "*", "bundle.json"))
+	if err != nil || len(cached) != 1 {
+		t.Fatalf("expected one cached bundle file, got %v err=%v", cached, err)
+	}
+	cachedData, err := os.ReadFile(cached[0])
+	if err != nil {
+		t.Fatalf("read cached: %v", err)
+	}
+	if !bytes.Equal(cachedData, bundleData) {
+		t.Fatalf("cached bundle bytes differ from decompressed bundle (len cached=%d want=%d)", len(cachedData), len(bundleData))
+	}
+}
+
+func TestPasswordProviderRejectsHTTPHashDBBundleSHA256Mismatch(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-sha-mismatch-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	bundlePath, pubHex := writeSignedBundleForTest(t, dir, archivePath, []string{"sha-mismatch-pw"})
+	bundleData, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read bundle: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bundleData)
+	}))
+	defer server.Close()
+
+	wrongSha := hex.EncodeToString(make([]byte, 32)) // all-zero hash, won't match
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{
+					Name:      "sha-mismatch",
+					URL:       server.URL + "/bundle.json",
+					CacheDir:  filepath.Join(dir, "cache"),
+					PublicKey: pubHex,
+					SHA256:    wrongSha,
+				},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	got := provider.hashDBPasswords(context.Background(), archivePath)
+	if containsString(got, "sha-mismatch-pw") {
+		t.Fatalf("expected sha mismatch to suppress password, got %#v", got)
+	}
+	cached, _ := filepath.Glob(filepath.Join(dir, "cache", "*", "bundle.json"))
+	if len(cached) != 0 {
+		t.Fatalf("expected no cache file installed on sha mismatch, got %v", cached)
+	}
+}
+
+func TestPasswordProviderDownloadsCompressedHTTPHashDBShard(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "secret.zip")
+	if err := os.WriteFile(archivePath, []byte("hashdb-http-compressed-shard-bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	shardBase := filepath.Join(dir, "sharded-src")
+	if err := os.MkdirAll(shardBase, 0o755); err != nil {
+		t.Fatalf("mkdir sharded source: %v", err)
+	}
+	_, pubHex := writeShardedSourceForTest(t, shardBase, archivePath, []string{"http-compressed-shard-found"})
+
+	// Rewrite each shard to gzip form and update the manifest with the
+	// compressed bytes' sha256 plus compression: "gzip".
+	manifestData, err := os.ReadFile(filepath.Join(shardBase, "manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest hashdb.Manifest
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	for prefix, shard := range manifest.Shards {
+		raw, err := os.ReadFile(filepath.Join(shardBase, shard.Path))
+		if err != nil {
+			t.Fatalf("read shard: %v", err)
+		}
+		// Delete the uncompressed shard so any request for it would 404.
+		_ = os.Remove(filepath.Join(shardBase, shard.Path))
+		compressed := gzipBytes(t, raw)
+		compressedRel := shard.Path + ".gz"
+		if err := os.WriteFile(filepath.Join(shardBase, compressedRel), compressed, 0o644); err != nil {
+			t.Fatalf("write compressed shard: %v", err)
+		}
+		sum := sha256.Sum256(compressed)
+		shard.Path = compressedRel
+		shard.SHA256 = hex.EncodeToString(sum[:])
+		shard.Compression = "gzip"
+		manifest.Shards[prefix] = shard
+	}
+	rewritten, err := hashdb.MarshalManifest(manifest)
+	if err != nil {
+		t.Fatalf("MarshalManifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(shardBase, "manifest.json"), rewritten, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	manifestData = rewritten
+
+	var manifestRequests, shardRequests int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/manifest.json":
+			atomic.AddInt32(&manifestRequests, 1)
+			_, _ = w.Write(manifestData)
+		default:
+			atomic.AddInt32(&shardRequests, 1)
+			http.ServeFile(w, r, filepath.Join(shardBase, r.URL.Path))
+		}
+	}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		HashDB: config.HashDBConfig{
+			Mode: "lookup",
+			Sources: []config.HashDBSource{
+				{Name: "http-compressed-sharded", Type: "sharded", ManifestURL: server.URL + "/manifest.json", CacheDir: filepath.Join(dir, "cache"), PublicKey: pubHex},
+			},
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider(archivePath, filepath.Base(archivePath), cfg, learned)
+
+	for i := 0; i < 2; i++ {
+		got := provider.hashDBPasswords(context.Background(), archivePath)
+		if len(got) != 1 || got[0] != "http-compressed-shard-found" {
+			t.Fatalf("lookup %d hashDBPasswords = %#v, want [http-compressed-shard-found]", i+1, got)
+		}
+	}
+	if got := atomic.LoadInt32(&manifestRequests); got != 1 {
+		t.Fatalf("manifest requests = %d, want 1", got)
+	}
+	if got := atomic.LoadInt32(&shardRequests); got != 1 {
+		t.Fatalf("compressed shard requests = %d, want 1", got)
+	}
+	cachedShards, err := filepath.Glob(filepath.Join(dir, "cache", "*", "shards", "*.json.gz"))
+	if err != nil || len(cachedShards) != 1 {
+		t.Fatalf("expected one cached compressed-named shard, got %v err=%v", cachedShards, err)
+	}
+	cachedData, err := os.ReadFile(cachedShards[0])
+	if err != nil {
+		t.Fatalf("read cached shard: %v", err)
+	}
+	// Cached shard must be the decompressed signed bundle JSON (begins with '{').
+	if len(cachedData) == 0 || cachedData[0] != '{' {
+		t.Fatalf("cached shard appears compressed (first byte %x); expected decompressed JSON", cachedData[:min(len(cachedData), 4)])
 	}
 }

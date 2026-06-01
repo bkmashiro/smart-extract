@@ -69,6 +69,14 @@ type HashDBSource struct {
 	ManifestURL  string `yaml:"manifest_url,omitempty"`
 	CacheDir     string `yaml:"cache_dir,omitempty"`
 	PublicKey    string `yaml:"public_key,omitempty"`
+	// Compression, when set, is the compression codec applied to the bundle
+	// bytes served at URL. Currently only "gzip" is supported. Empty means
+	// the bytes are stored uncompressed.
+	Compression string `yaml:"compression,omitempty"`
+	// SHA256, when set, is the lowercase hex SHA-256 of the downloaded bytes
+	// (compressed bytes when Compression is set, otherwise raw bundle bytes).
+	// Verified before installing the cache file.
+	SHA256 string `yaml:"sha256,omitempty"`
 	// Disabled, when true, suppresses lookups against this source.
 	// Defaults to false so a configured source is enabled by default.
 	Disabled bool `yaml:"disabled,omitempty"`

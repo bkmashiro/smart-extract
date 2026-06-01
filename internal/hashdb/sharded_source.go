@@ -17,10 +17,17 @@ import (
 const ManifestVersion = 1
 
 // ShardInfo describes a single shard file referenced from a Manifest.
+//
+// SHA256 covers the raw on-disk shard bytes when Compression is empty
+// (legacy/local case). When Compression is non-empty, SHA256 covers the
+// compressed bytes as fetched from a mirror; cached/local files reflect the
+// decompressed signed bundle, whose integrity is then anchored by its
+// signature.
 type ShardInfo struct {
-	Path   string `json:"path"`
-	SHA256 string `json:"sha256"`
-	Count  int    `json:"count,omitempty"`
+	Path        string `json:"path"`
+	SHA256      string `json:"sha256"`
+	Count       int    `json:"count,omitempty"`
+	Compression string `json:"compression,omitempty"`
 }
 
 // Manifest is the top-level index for a local sharded HashDB source. Shard
@@ -238,9 +245,16 @@ func LookupShardedFileSource(ctx context.Context, source ShardedFileSource, arch
 	if err != nil {
 		return nil, fmt.Errorf("hashdb sharded source: read shard %s: %w", prefix, err)
 	}
-	gotSum := sha256.Sum256(shardData)
-	if hex.EncodeToString(gotSum[:]) != strings.ToLower(shard.SHA256) {
-		return nil, fmt.Errorf("hashdb sharded source: shard %s sha256 mismatch", prefix)
+	// When Compression is empty, shard.SHA256 covers the raw on-disk bytes
+	// (legacy/local case). When Compression is set, the cached on-disk file
+	// holds decompressed bytes whose integrity is anchored by the bundle
+	// signature below; the manifest sha256 covers the compressed mirror
+	// bytes, which have already been verified at download time.
+	if shard.Compression == "" {
+		gotSum := sha256.Sum256(shardData)
+		if hex.EncodeToString(gotSum[:]) != strings.ToLower(shard.SHA256) {
+			return nil, fmt.Errorf("hashdb sharded source: shard %s sha256 mismatch", prefix)
+		}
 	}
 
 	signed, err := ParseSignedBundle(shardData)
