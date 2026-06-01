@@ -188,6 +188,40 @@ func TestPreferenceStateMachine(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesProbeBudgetProfile(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte("probe_budget_profile: light\nfallback_passwords:\n  - \"123\"\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if c.ProbeBudgetProfile != "light" {
+		t.Fatalf("ProbeBudgetProfile = %q, want %q", c.ProbeBudgetProfile, "light")
+	}
+}
+
+func TestLoadConfigProbeBudgetProfileOptional(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte("fallback_passwords:\n  - \"abc\"\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if c.ProbeBudgetProfile != "" {
+		t.Fatalf("ProbeBudgetProfile = %q, want empty", c.ProbeBudgetProfile)
+	}
+}
+
 func TestPreferences_PreservesOtherData(t *testing.T) {
 	// Ensure saving preferences doesn't wipe out other learned data
 	setupTestDir(t)

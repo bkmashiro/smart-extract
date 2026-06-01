@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/bkmashiro/smart-extract/internal/budget"
 )
 
 // RecursiveExtractOptions controls recursive extraction behavior
@@ -15,6 +17,9 @@ type RecursiveExtractOptions struct {
 	// MaxParallelProbes caps the number of parallel password workers.
 	// 0 means use runtime.NumCPU(). Default is 4.
 	MaxParallelProbes int
+	// BudgetProfile controls cost-aware candidate and probe budgets.
+	// The zero value is budget.ProfileNormal for backwards compatibility.
+	BudgetProfile budget.Profile
 	// TryPassword is called when an archive needs a password attempt.
 	// It should return a list of passwords to try, in order.
 	TryPassword func(archivePath string) ([]string, error)
@@ -36,26 +41,24 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 
 	outputDir := OutputDirForArchive(archivePath)
 
-	// Get passwords to try
-	passwords, err := opts.TryPassword(archivePath)
-	if err != nil {
-		return "", "", err
-	}
-
 	if opts.OnProgress != nil {
 		opts.OnProgress(fmt.Sprintf("📦 解压 %s → %s", filepath.Base(archivePath), outputDir))
 	}
 
-	// Detect archive format and choose probe strategy
+	// Detect archive format and choose probe strategy.
 	af := DetectFormat(archivePath, opts.SevenZipPath)
 	if opts.OnProgress != nil {
 		opts.OnProgress(fmt.Sprintf("🔍 格式: %s", DetectFormatString(af)))
 	}
 
-	maxPar := opts.MaxParallelProbes
-	if maxPar == 0 {
-		maxPar = DefaultMaxParallelProbes
+	// Get passwords to try after format detection so per-archive budgets can
+	// be applied consistently, including nested archives.
+	passwords, err := opts.TryPassword(archivePath)
+	if err != nil {
+		return "", "", err
 	}
+
+	maxPar := budgetedMaxParallel(opts, af, archiveSize(archivePath))
 
 	// Use the appropriate probing strategy — both extract directly (no double-extraction)
 	switch af.Strategy {
@@ -105,6 +108,27 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 	}
 
 	return outputDir, successPwd, nil
+}
+
+func budgetedMaxParallel(opts RecursiveExtractOptions, af ArchiveFormat, archiveSizeBytes int64) int {
+	rec := budget.Recommend(budget.Inputs{
+		Format:            af.Format,
+		ArchiveSizeBytes:  archiveSizeBytes,
+		Profile:           opts.BudgetProfile,
+		MaxParallelProbes: opts.MaxParallelProbes,
+	})
+	if rec.MaxParallelProbes < 1 {
+		return 1
+	}
+	return rec.MaxParallelProbes
+}
+
+func archiveSize(path string) int64 {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
 }
 
 // trySteganographicExtract retries extraction with forced format types (-tzip, -t7z, -trar).

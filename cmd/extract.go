@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bkmashiro/smart-extract/internal/budget"
 	"github.com/bkmashiro/smart-extract/internal/candidates"
 	"github.com/bkmashiro/smart-extract/internal/config"
 	"github.com/bkmashiro/smart-extract/internal/extractor"
@@ -64,6 +65,7 @@ func Extract(archivePath string) error {
 	// Build password provider
 	provider := newPasswordProvider(archivePath, archiveName, cfg, learned)
 	provider.candidateSource = learningStore
+	provider.sevenZipPath = sevenZipPath
 
 	// Determine the person for this file
 	person, err := provider.identifyPerson()
@@ -77,10 +79,12 @@ func Extract(archivePath string) error {
 		BandizipPath:      cfg.BandizipPath,
 		MaxDepth:          10,
 		MaxParallelProbes: cfg.MaxParallelProbes,
+		BudgetProfile:     budget.ParseProfile(cfg.ProbeBudgetProfile),
 		TryPassword: func(ap string) ([]string, error) {
 			// For nested archives, create a sub-provider
 			subProvider := newPasswordProvider(ap, filepath.Base(ap), cfg, learned)
 			subProvider.candidateSource = learningStore
+			subProvider.sevenZipPath = sevenZipPath
 			person2, _ := subProvider.identifyPerson()
 			subProvider.resolvedPerson = person2
 			return subProvider.getPasswords(ap)
@@ -132,6 +136,7 @@ type passwordProvider struct {
 	learned         *config.Learned
 	candidateSource candidates.Source
 	resolvedPerson  string
+	sevenZipPath    string
 }
 
 func newPasswordProvider(archivePath, archiveName string, cfg *config.Config, learned *config.Learned) *passwordProvider {
@@ -294,11 +299,13 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 	learned := p.learned
 
 	if p.candidateSource != nil {
+		rec := p.budgetRecommendation(archivePath)
 		built, err := candidates.Build(context.Background(), candidates.Request{
 			ArchivePath:       archivePath,
 			ArchiveKey:        archiveName,
 			StaticPasswords:   p.legacyStaticPasswords(),
 			FallbackPasswords: cfg.FallbackPasswords,
+			CandidateLimit:    rec.CandidateLimit,
 		}, p.candidateSource)
 		if err != nil {
 			return nil, err
@@ -397,6 +404,20 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 	addPwd("")
 
 	return passwords, nil
+}
+
+func (p *passwordProvider) budgetRecommendation(archivePath string) budget.Recommendation {
+	af := extractor.DetectFormat(archivePath, p.sevenZipPath)
+	var size int64
+	if info, err := os.Stat(archivePath); err == nil {
+		size = info.Size()
+	}
+	return budget.Recommend(budget.Inputs{
+		Format:            af.Format,
+		ArchiveSizeBytes:  size,
+		Profile:           budget.ParseProfile(p.cfg.ProbeBudgetProfile),
+		MaxParallelProbes: p.cfg.MaxParallelProbes,
+	})
 }
 
 // handleUnknownPassword is called when all passwords fail — shows dialog and learns

@@ -12,11 +12,12 @@ import (
 
 // Config represents config.yaml
 type Config struct {
-	SevenZipPath      string             `yaml:"sevenzip_path"`
-	BandizipPath      string             `yaml:"bandizip_path,omitempty"`
-	MaxParallelProbes int                `yaml:"max_parallel_probes,omitempty"`
-	People            map[string]*Person `yaml:"people"`
-	FallbackPasswords []string           `yaml:"fallback_passwords"`
+	SevenZipPath       string             `yaml:"sevenzip_path"`
+	BandizipPath       string             `yaml:"bandizip_path,omitempty"`
+	MaxParallelProbes  int                `yaml:"max_parallel_probes,omitempty"`
+	ProbeBudgetProfile string             `yaml:"probe_budget_profile,omitempty"`
+	People             map[string]*Person `yaml:"people"`
+	FallbackPasswords  []string           `yaml:"fallback_passwords"`
 }
 
 // Person represents a person's profile in config.yaml

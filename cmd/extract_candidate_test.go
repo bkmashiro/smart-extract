@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -89,6 +90,86 @@ func TestPasswordProviderKeepsLegacyPersonPasswordsWhenLearningSourceEnabled(t *
 		if !containsString(got, password) {
 			t.Fatalf("password candidates missing %q: %#v", password, got)
 		}
+	}
+}
+
+func makePasswordList(prefix string, n int) []string {
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, fmt.Sprintf("%s-%03d", prefix, i))
+	}
+	return out
+}
+
+func TestPasswordProviderLightProfileCapsCandidateList(t *testing.T) {
+	cfg := &config.Config{
+		People: map[string]*config.Person{
+			"common": {
+				MatchMode: "always_try",
+				Priority:  1,
+				Passwords: makePasswordList("p", 30),
+			},
+		},
+		FallbackPasswords:  makePasswordList("fb", 10),
+		ProbeBudgetProfile: "light",
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider("/tmp/some.zip", "some.zip", cfg, learned)
+	provider.candidateSource = fakeCandidateSource{}
+
+	got, err := provider.getPasswords("/tmp/some.zip")
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatalf("expected some candidates, got 0")
+	}
+	if len(got) > 20 {
+		t.Fatalf("light profile cheap-zip cap should be <=20 candidates, got %d", len(got))
+	}
+
+	cfgAgg := *cfg
+	cfgAgg.ProbeBudgetProfile = "aggressive"
+	providerAgg := newPasswordProvider("/tmp/some.zip", "some.zip", &cfgAgg, learned)
+	providerAgg.candidateSource = fakeCandidateSource{}
+	aggressive, err := providerAgg.getPasswords("/tmp/some.zip")
+	if err != nil {
+		t.Fatalf("getPasswords(aggressive): %v", err)
+	}
+	if len(aggressive) <= len(got) {
+		t.Fatalf("aggressive (%d) should yield more candidates than light (%d)", len(aggressive), len(got))
+	}
+}
+
+func TestPasswordProviderEmptyProfilePreservesLegacyCandidateList(t *testing.T) {
+	// With no profile configured, the candidate list should not be truncated
+	// for a small set — i.e. backwards compatibility.
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider("/downloads/password=filename-pass.zip", "password=filename-pass.zip", cfg, learned)
+	provider.candidateSource = fakeCandidateSource{
+		exact:    map[string]string{"password=filename-pass.zip": "exact-pass"},
+		sessions: map[string][]string{"/downloads": {"session-pass"}},
+	}
+
+	got, err := provider.getPasswords("/downloads/password=filename-pass.zip")
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	want := []string{"exact-pass", "filename-pass", "session-pass", "", "fallback-pass"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("password candidates = %#v, want %#v", got, want)
 	}
 }
 
