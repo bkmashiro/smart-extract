@@ -47,6 +47,7 @@ go build -ldflags="-H windowsgui" -o smart-extract.exe .
 ```
 smart-extract.exe --install     Install right-click menu
 smart-extract.exe --uninstall   Remove right-click menu
+smart-extract.exe --hashdb-public-key ./hashdb/private/signing.key.json
 smart-extract.exe <archive>     Extract an archive (called by Explorer)
 ```
 
@@ -110,7 +111,10 @@ hashdb:
 ```
 
 Contribution is opt-in. Bundle and shard files only contain encrypted records;
-the plaintext password never appears on disk in these files.
+the plaintext password never appears on disk in these files. Use
+`smart-extract.exe --hashdb-public-key ./hashdb/private/signing.key.json` to
+print the hex public key to paste into a matching `hashdb.sources[].public_key`
+entry.
 
 ### Local learning store
 
