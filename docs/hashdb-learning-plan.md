@@ -22,7 +22,7 @@
 
 ---
 
-## Phase 1: Document and Implement HashDB Crypto Core
+## Phase 1: Document and Implement HashDB Crypto Core — **Implemented**
 
 **Objective:** Add the local cryptographic primitive used by all future HashDB sources.
 
@@ -44,7 +44,7 @@
 
 ---
 
-## Phase 2: SQLite Learning Store
+## Phase 2: SQLite Learning Store — **Implemented**
 
 **Objective:** Introduce append-only raw observations and migration from `learned.yaml` without replacing the current extractor path yet.
 
@@ -70,7 +70,7 @@
 
 ---
 
-## Phase 3: Candidate Builder
+## Phase 3: Candidate Builder — **Implemented**
 
 **Objective:** Generate password candidates from local sources in a deterministic, explainable order.
 
@@ -92,7 +92,7 @@
 
 ---
 
-## Phase 4: Batch Summarizer
+## Phase 4: Batch Summarizer — **Implemented**
 
 **Objective:** Convert raw observations into stronger pattern rules.
 
@@ -110,7 +110,7 @@
 
 ---
 
-## Phase 5: Cost-Aware Probe and Parallelism
+## Phase 5: Cost-Aware Probe and Parallelism — **Implemented locally**
 
 **Objective:** Make automatic attempts fast and bounded.
 
@@ -131,7 +131,7 @@
 
 ---
 
-## Phase 6: Decentralized HashDB Sources
+## Phase 6: Decentralized HashDB Sources — **Implemented for local file sources**
 
 **Objective:** Add optional signed static sources that can be hosted anywhere.
 
@@ -142,11 +142,11 @@
 - `ciphertext = AEAD_Encrypt(key, password)`.
 
 **Source model:**
-- `manifest.json` signed by source Ed25519 key.
-- `shards/*.json.zst` or equivalent static shard files.
-- Shards addressed by record-id prefix.
-- Client validates manifest signature and shard hashes.
-- Query uses prefix buckets to avoid sending exact archive identity where practical.
+- Single-file signed bundles are supported for small/private sources.
+- `manifest.json` + signed shard files are supported for sharded file sources.
+- Shards are addressed by record-id prefix.
+- Client validates source Ed25519 signatures and shard hashes.
+- Query loads only the matching local shard rather than the whole source.
 
 **Distribution:**
 - `https://` and `file://` first.
@@ -161,7 +161,7 @@
 
 ---
 
-## Phase 7: Contribution Flow
+## Phase 7: Contribution Flow — **Implemented for local bundle/sharded sinks**
 
 **Objective:** Allow users to contribute encrypted records without leaking plaintext passwords to the service.
 
@@ -174,9 +174,51 @@
 - `auto`: advanced opt-in only.
 
 **Contribution target:**
-- Official submit API.
-- Third-party submit API.
-- Local private source/export bundle.
+- Local private signed bundle.
+- Local private sharded source.
+- Official/third-party submit APIs are future work.
+
+---
+
+## Implemented Config Shape
+
+Defaults are private and offline: no lookup and no contribution unless explicitly configured.
+
+```yaml
+hashdb:
+  mode: lookup                  # off | lookup
+  sources:
+    - name: private-bundle
+      type: bundle
+      path: ./hashdb/private.bundle.json
+      public_key: "<hex ed25519 public key>"
+    - name: private-shards
+      type: sharded
+      base_dir: ./hashdb/private
+      public_key: "<hex ed25519 public key>"
+
+  contribute: auto              # off | auto; ask is reserved and treated as off
+  contribution:
+    type: sharded               # sharded | bundle
+    base_dir: ./hashdb/private
+    # path: ./hashdb/private.bundle.json   # for type: bundle
+    key_path: ./hashdb/private/signing.key.json
+    source: local-private
+    shard_prefix_length: 2
+```
+
+Successful top-level and nested extractions go through the same success callback. When `contribute: auto` is configured, the callback appends an encrypted archive-bound record to the configured local sink. Contribution failures are warnings only; extraction and local SQLite learning still succeed.
+
+---
+
+## Remaining Work
+
+- HTTP/static source reader and content-addressed cache for subscribed sources.
+- `ask` contribution mode UI; currently parsed but intentionally treated as off.
+- Convenience tooling to print/export the contribution signing public key and optionally add it as a lookup source.
+- Legacy `learned.yaml` dependency cleanup: keep migration compatibility, but make SQLite the only normal write/read path.
+- Cross-process throttling/semaphore for Explorer multi-select and heavy L2 probes.
+- Optional source compression and mirror distribution (zstd/IPFS/torrent-like snapshots later).
 
 ---
 

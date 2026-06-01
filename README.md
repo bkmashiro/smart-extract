@@ -6,12 +6,20 @@ A Windows tool that adds a right-click context menu entry to intelligently extra
 
 - Right-click any `.zip`, `.rar`, `.7z`, `.tar.gz`, etc. → "智能解压" menu
 - Multi-select files supported (Windows calls the exe once per file, in parallel)
-- Smart password system with 3-tier priority:
-  1. **Exact cache** (`learned.yaml`): remembers specific filenames → passwords
-  2. **Person profiles** (`config.yaml`): pattern/regex matching per person, Thompson Sampling ordering
-  3. **Fallback list** (`config.yaml`): global password list
-- Recursive extraction (nested archives)
-- Automatic single-folder flattening (e.g., `output/output/files` → `output/files`)
+- Local-first password learning backed by SQLite (`learning.db`):
+  exact archive cache, raw password observations, derived pattern rules,
+  session/sibling context, and a local password dictionary.
+- Deterministic candidate builder ordering parent-recursive → exact cache →
+  filename/parent extraction → session context → pattern rules → online stats →
+  local dictionary → empty → config fallback.
+- Cost budget profiles (`light` / `normal` / `aggressive`) and bounded
+  parallelism for fast, predictable probing.
+- Optional **local-only** HashDB lookup and contribution: signed bundles and
+  sharded directories on disk. No network access by default; plaintext
+  passwords are never written to bundle/shard files (records are AES-GCM
+  encrypted with keys derived from the archive hash).
+- Recursive extraction (nested archives) and automatic single-folder
+  flattening (e.g., `output/output/files` → `output/files`).
 - ML features: n-gram person identification, Thompson Sampling, auto-clustering hints
 - Native Windows dialogs (via zenity) for unknown passwords
 - Named Windows mutex to prevent duplicate dialogs
@@ -49,6 +57,10 @@ smart-extract.exe <archive>     Extract an archive (called by Explorer)
 ```yaml
 sevenzip_path: ""  # auto-detected if empty
 
+# Optional. Defaults: normal budget, auto parallelism.
+probe_budget_profile: normal     # light | normal | aggressive
+max_parallel_probes: 0           # 0 = auto (runtime.NumCPU based)
+
 people:
   alice:
     patterns: ["alice_\\d+", "ALI"]
@@ -59,22 +71,54 @@ people:
 fallback_passwords:
   - "123456"
   - ""
+
+# Optional. HashDB is off by default and never touches the network.
+hashdb:
+  mode: off              # off | lookup
+  sources: []            # see examples below
+  contribute: off        # off | auto   (ask is reserved; treated as off)
 ```
 
-### learned.yaml (auto-managed)
+#### HashDB lookup from a local signed bundle and a local sharded source
 
 ```yaml
-exact:
-  "secretfile.zip": "pass123"
-
-person_stats:
-  alice:
-    "alice123": {alpha: 14, beta: 1}
-
-person_filenames:
-  alice:
-    - "alice_2024_01"
+hashdb:
+  mode: lookup
+  sources:
+    - name: shared-bundle
+      type: bundle
+      path: ./hashdb/shared.bundle.json
+      public_key: "<hex ed25519 public key>"
+    - name: team-shards
+      type: sharded
+      base_dir: ./hashdb/team
+      public_key: "<hex ed25519 public key>"
 ```
+
+#### Auto-contribute successful extractions to a private local sharded source
+
+```yaml
+hashdb:
+  mode: lookup
+  contribute: auto
+  contribution:
+    type: sharded             # or "bundle"
+    base_dir: ./hashdb/private
+    key_path: ./hashdb/private/signing.key.json
+    source: my-private-source
+    shard_prefix_length: 2
+```
+
+Contribution is opt-in. Bundle and shard files only contain encrypted records;
+the plaintext password never appears on disk in these files.
+
+### Local learning store
+
+- `learning.db` (SQLite, next to the exe) is the authoritative local
+  learning store: exact cache, raw observations, pattern rules, session
+  context, and the local password dictionary.
+- `learned.yaml` is legacy. If present, it is migrated into `learning.db`
+  on first run and is no longer the source of truth.
 
 ## Requirements
 
