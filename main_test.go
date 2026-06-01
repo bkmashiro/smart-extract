@@ -187,6 +187,84 @@ func TestRunHashDBClearCacheMissingArgReturnsNonZero(t *testing.T) {
 	}
 }
 
+func TestRunHashDBDisableAndEnableSourceFlipsConfig(t *testing.T) {
+	setupTempConfig(t)
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.HashDB.Mode = "lookup"
+	cfg.HashDB.Sources = []config.HashDBSource{
+		{Name: "mirror-a", Type: "bundle", URL: "https://example.com/a.bundle.json"},
+		{Name: "mirror-b", Type: "bundle", URL: "https://example.com/b.bundle.json", Disabled: true},
+	}
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	config.ReloadAll()
+
+	deps, stdout, stderr := newTestDeps()
+	if code := run([]string{"--hashdb-disable-source", "mirror-a"}, deps); code != 0 {
+		t.Fatalf("disable exit=%d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "mirror-a") {
+		t.Fatalf("expected source name in stdout, got: %s", stdout.String())
+	}
+
+	config.ReloadAll()
+	cfg, err = config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig after disable: %v", err)
+	}
+	if !cfg.HashDB.Sources[0].Disabled {
+		t.Fatalf("mirror-a should be disabled, got %+v", cfg.HashDB.Sources[0])
+	}
+
+	deps2, stdout2, stderr2 := newTestDeps()
+	if code := run([]string{"--hashdb-enable-source", "mirror-b"}, deps2); code != 0 {
+		t.Fatalf("enable exit=%d stderr=%s", code, stderr2.String())
+	}
+	if !strings.Contains(stdout2.String(), "mirror-b") {
+		t.Fatalf("expected source name in stdout, got: %s", stdout2.String())
+	}
+
+	config.ReloadAll()
+	cfg, err = config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig after enable: %v", err)
+	}
+	if cfg.HashDB.Sources[1].Disabled {
+		t.Fatalf("mirror-b should be enabled, got %+v", cfg.HashDB.Sources[1])
+	}
+}
+
+func TestRunHashDBDisableSourceMissingArgReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+
+	deps, _, stderr := newTestDeps()
+	code := run([]string{"--hashdb-disable-source"}, deps)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit, stderr=%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--hashdb-disable-source") {
+		t.Fatalf("expected usage hint in stderr, got: %q", stderr.String())
+	}
+}
+
+func TestRunHashDBEnableSourceMissingNameReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+
+	deps, _, stderr := newTestDeps()
+	code := run([]string{"--hashdb-enable-source", "does-not-exist"}, deps)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit, stderr=%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "does-not-exist") {
+		t.Fatalf("expected source name in stderr, got: %q", stderr.String())
+	}
+}
+
 // resolveHashDBCacheRootForTest reads the configured source by name and
 // computes the same cache root the cmd helpers would derive. It indirectly
 // exercises cmd.HashDBListSources to avoid duplicating cache-root logic in

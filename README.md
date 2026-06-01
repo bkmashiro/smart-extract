@@ -165,12 +165,16 @@ editing `config.yaml` by hand:
 
 ```powershell
 smart-extract.exe --hashdb-list-sources
+smart-extract.exe --hashdb-disable-source mirror-bundle
+smart-extract.exe --hashdb-enable-source mirror-bundle
 smart-extract.exe --hashdb-clear-cache mirror-bundle
 smart-extract.exe --hashdb-clear-cache --all
 ```
 
 `--hashdb-list-sources` prints each source's name, type, location and (for
 HTTP sources) the resolved cache directory plus whether it exists.
+`--hashdb-disable-source <name>` and `--hashdb-enable-source <name>` flip the
+configured source's `disabled` flag without changing ordering or other fields.
 `--hashdb-clear-cache <name>` removes the cache root of a single HTTP source;
 `--all` removes every HTTP source cache root (duplicates are removed once).
 Local bundle/sharded sources have no cache to clear and the named form

@@ -192,6 +192,133 @@ func TestHashDBClearSourceCacheRejectsLocalSource(t *testing.T) {
 	}
 }
 
+func TestHashDBSetSourceDisabledTogglesNamedSource(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	config.ReloadAll()
+
+	cacheDir := filepath.Join(dir, "hashdb-cache")
+	seedManageConfig(t, cacheDir)
+
+	// Disable the currently-enabled mirror-bundle source.
+	updated, err := HashDBSetSourceDisabled("mirror-bundle", true)
+	if err != nil {
+		t.Fatalf("HashDBSetSourceDisabled(disable): %v", err)
+	}
+	if updated.Name != "mirror-bundle" || !updated.Disabled {
+		t.Fatalf("returned source = %+v, want Name=mirror-bundle Disabled=true", updated)
+	}
+
+	config.ReloadAll()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if len(cfg.HashDB.Sources) != 3 {
+		t.Fatalf("sources len = %d, want 3", len(cfg.HashDB.Sources))
+	}
+	if cfg.HashDB.Sources[0].Name != "local-bundle" ||
+		cfg.HashDB.Sources[1].Name != "mirror-bundle" ||
+		cfg.HashDB.Sources[2].Name != "mirror-shards" {
+		t.Fatalf("source order changed: %+v", cfg.HashDB.Sources)
+	}
+	if cfg.HashDB.Sources[0].Disabled {
+		t.Fatalf("local-bundle Disabled changed unexpectedly")
+	}
+	if !cfg.HashDB.Sources[1].Disabled {
+		t.Fatalf("mirror-bundle should be disabled in saved config")
+	}
+	if !cfg.HashDB.Sources[2].Disabled {
+		t.Fatalf("mirror-shards Disabled changed unexpectedly")
+	}
+
+	// Re-enable the already-disabled mirror-shards source.
+	updated, err = HashDBSetSourceDisabled("mirror-shards", false)
+	if err != nil {
+		t.Fatalf("HashDBSetSourceDisabled(enable): %v", err)
+	}
+	if updated.Disabled {
+		t.Fatalf("returned source should be enabled, got %+v", updated)
+	}
+
+	config.ReloadAll()
+	cfg, err = config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.HashDB.Sources[2].Disabled {
+		t.Fatalf("mirror-shards should now be enabled")
+	}
+}
+
+func TestHashDBSetSourceDisabledIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	config.ReloadAll()
+
+	cacheDir := filepath.Join(dir, "hashdb-cache")
+	seedManageConfig(t, cacheDir)
+
+	// mirror-shards is already disabled; disabling again must succeed.
+	updated, err := HashDBSetSourceDisabled("mirror-shards", true)
+	if err != nil {
+		t.Fatalf("idempotent disable failed: %v", err)
+	}
+	if !updated.Disabled {
+		t.Fatalf("expected Disabled=true, got %+v", updated)
+	}
+
+	// local-bundle is already enabled; enabling again must succeed.
+	updated, err = HashDBSetSourceDisabled("local-bundle", false)
+	if err != nil {
+		t.Fatalf("idempotent enable failed: %v", err)
+	}
+	if updated.Disabled {
+		t.Fatalf("expected Disabled=false, got %+v", updated)
+	}
+}
+
+func TestHashDBSetSourceDisabledRejectsEmptyAndMissing(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	config.ReloadAll()
+
+	seedManageConfig(t, filepath.Join(dir, "hashdb-cache"))
+
+	if _, err := HashDBSetSourceDisabled("", true); err == nil {
+		t.Fatalf("expected error for empty name")
+	}
+	if _, err := HashDBSetSourceDisabled("does-not-exist", true); err == nil {
+		t.Fatalf("expected error for missing source")
+	}
+}
+
+func TestHashDBSetSourceDisabledPreservesOtherFields(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	config.ReloadAll()
+
+	cacheDir := filepath.Join(dir, "hashdb-cache")
+	seedManageConfig(t, cacheDir)
+
+	if _, err := HashDBSetSourceDisabled("mirror-bundle", true); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	config.ReloadAll()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	got := cfg.HashDB.Sources[1]
+	if got.Name != "mirror-bundle" || got.Type != "bundle" ||
+		got.URL != "https://example.com/hashdb/shared.bundle.json.gz" ||
+		got.Compression != "gzip" || got.SHA256 != "deadbeef" ||
+		got.CacheDir != cacheDir || got.PublicKey != "bb" {
+		t.Fatalf("non-Disabled fields modified: %+v", got)
+	}
+}
+
 func TestHashDBClearAllSourceCachesDeduplicates(t *testing.T) {
 	dir := t.TempDir()
 	config.Init(dir)

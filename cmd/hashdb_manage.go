@@ -103,6 +103,33 @@ func HashDBClearSourceCache(name string) (string, bool, error) {
 	return "", false, fmt.Errorf("hashdb source %q not found", name)
 }
 
+// HashDBSetSourceDisabled toggles the Disabled flag on a configured HashDB
+// source identified by exact Name. It loads config.yaml, updates the matching
+// source, saves config, and returns the updated source. The call is
+// idempotent: setting the same Disabled value is a no-op write that still
+// reports success.
+func HashDBSetSourceDisabled(name string, disabled bool) (config.HashDBSource, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return config.HashDBSource{}, fmt.Errorf("source name is required")
+	}
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return config.HashDBSource{}, err
+	}
+	for i := range cfg.HashDB.Sources {
+		if cfg.HashDB.Sources[i].Name != name {
+			continue
+		}
+		cfg.HashDB.Sources[i].Disabled = disabled
+		if err := config.SaveConfig(cfg); err != nil {
+			return config.HashDBSource{}, err
+		}
+		return cfg.HashDB.Sources[i], nil
+	}
+	return config.HashDBSource{}, fmt.Errorf("hashdb source %q not found", name)
+}
+
 // HashDBClearAllSourceCaches removes the cache root of every configured
 // HTTP HashDB source. Duplicate cache roots are removed once and reported
 // once (under the first source that referenced them).

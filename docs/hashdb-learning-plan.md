@@ -226,7 +226,7 @@ Static HTTP mirror sources may serve gzip-compressed bundles or shards. Bundle s
 
 ---
 
-Source and cache management is implemented: `--hashdb-list-sources` prints each configured source with its resolved HTTP cache directory and existence, and `--hashdb-clear-cache <name>` / `--hashdb-clear-cache --all` removes HTTP source cache roots (with dedup) without touching local-only bundle/sharded sources.
+Source and cache management is implemented: `--hashdb-list-sources` prints each configured source with its resolved HTTP cache directory and existence, `--hashdb-disable-source <name>` / `--hashdb-enable-source <name>` flip the source's `disabled` flag while preserving source order and fields, and `--hashdb-clear-cache <name>` / `--hashdb-clear-cache --all` removes HTTP source cache roots (with dedup) without touching local-only bundle/sharded sources.
 
 ## Remaining Work
 

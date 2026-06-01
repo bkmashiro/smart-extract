@@ -191,6 +191,30 @@ func run(args []string, deps runDeps) int {
 		}
 		deps.waitForKeypress("")
 
+	case "--hashdb-disable-source":
+		if len(args) < 2 {
+			return reportFatal(deps, "用法: smart-extract.exe --hashdb-disable-source <name>")
+		}
+		deps.allocConsole()
+		src, err := cmd.HashDBSetSourceDisabled(args[1], true)
+		if err != nil {
+			return reportFatal(deps, "禁用 HashDB 源失败: %v", err)
+		}
+		fmt.Fprintf(deps.stdout, "✓ 已禁用 HashDB 源: %s\n", src.Name)
+		deps.waitForKeypress("")
+
+	case "--hashdb-enable-source":
+		if len(args) < 2 {
+			return reportFatal(deps, "用法: smart-extract.exe --hashdb-enable-source <name>")
+		}
+		deps.allocConsole()
+		src, err := cmd.HashDBSetSourceDisabled(args[1], false)
+		if err != nil {
+			return reportFatal(deps, "启用 HashDB 源失败: %v", err)
+		}
+		fmt.Fprintf(deps.stdout, "✓ 已启用 HashDB 源: %s\n", src.Name)
+		deps.waitForKeypress("")
+
 	case "--help", "-h":
 		deps.allocConsole()
 		printUsage(deps.stdout)
@@ -223,6 +247,8 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-add-bundle-source <name> <bundle.json> <key.json>  添加本地 bundle lookup 源")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-add-sharded-source <name> <base_dir> <key.json>  添加本地 sharded lookup 源")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-list-sources                       列出已配置的 HashDB 源")
+	fmt.Fprintln(w, "  smart-extract.exe --hashdb-disable-source <name>              临时禁用指定 HashDB 源")
+	fmt.Fprintln(w, "  smart-extract.exe --hashdb-enable-source <name>               启用指定 HashDB 源")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache <name>                 清理指定 HashDB 源的本地缓存")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache --all                  清理所有 HashDB 源的本地缓存")
 	fmt.Fprintln(w, "  smart-extract.exe <archive>      解压文件")
