@@ -82,7 +82,12 @@ func (s *Store) SaveExact(ctx context.Context, entry ExactCacheEntry) error {
 // LookupExact returns a cached password for archiveKey, if present.
 func (s *Store) LookupExact(ctx context.Context, archiveKey string) (string, bool, error) {
 	var password string
-	err := s.db.QueryRowContext(ctx, `SELECT password FROM archive_cache WHERE archive_key = ?`, archiveKey).Scan(&password)
+	err := s.db.QueryRowContext(ctx, `
+		SELECT password FROM archive_cache
+		WHERE LOWER(archive_key) = LOWER(?)
+		ORDER BY (archive_key = ?) DESC
+		LIMIT 1
+	`, archiveKey, archiveKey).Scan(&password)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}

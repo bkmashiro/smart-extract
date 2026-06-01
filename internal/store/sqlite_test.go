@@ -220,6 +220,51 @@ func TestMigrateLearnedImportsLegacyYAMLData(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreLookupExactCaseInsensitive(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	defer st.Close()
+
+	if err := st.SaveExact(ctx, ExactCacheEntry{ArchiveKey: "Movie.ZIP", Password: "pw-mixed", Source: "test"}); err != nil {
+		t.Fatalf("SaveExact: %v", err)
+	}
+
+	password, ok, err := st.LookupExact(ctx, "movie.zip")
+	if err != nil {
+		t.Fatalf("LookupExact: %v", err)
+	}
+	if !ok {
+		t.Fatalf("LookupExact did not find case-insensitive match")
+	}
+	if password != "pw-mixed" {
+		t.Fatalf("password = %q, want %q", password, "pw-mixed")
+	}
+}
+
+func TestSQLiteStoreLookupExactPrefersExactCase(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	defer st.Close()
+
+	if err := st.SaveExact(ctx, ExactCacheEntry{ArchiveKey: "Movie.ZIP", Password: "pw-mixed", Source: "test"}); err != nil {
+		t.Fatalf("SaveExact mixed: %v", err)
+	}
+	if err := st.SaveExact(ctx, ExactCacheEntry{ArchiveKey: "movie.zip", Password: "pw-lower", Source: "test"}); err != nil {
+		t.Fatalf("SaveExact lower: %v", err)
+	}
+
+	password, ok, err := st.LookupExact(ctx, "movie.zip")
+	if err != nil {
+		t.Fatalf("LookupExact: %v", err)
+	}
+	if !ok {
+		t.Fatalf("LookupExact did not find entry")
+	}
+	if password != "pw-lower" {
+		t.Fatalf("password = %q, want exact-case %q", password, "pw-lower")
+	}
+}
+
 func openTestStore(t *testing.T) *Store {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "smart-extract.db")
