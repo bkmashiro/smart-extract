@@ -50,6 +50,7 @@ go build -ldflags="-H windowsgui" -o smart-extract.exe .
 smart-extract.exe --install     Install right-click menu
 smart-extract.exe --uninstall   Remove right-click menu
 smart-extract.exe --hashdb-public-key ./hashdb/private/signing.key.json
+smart-extract.exe --doctor
 smart-extract.exe --debug-log .\smart-extract-debug.log <archive>
 smart-extract.exe --explain <archive>
 smart-extract.exe <archive>     Extract an archive (called by Explorer)
@@ -201,9 +202,12 @@ For a safer dry-run style diagnosis that does not extract, prompt, learn,
 contribute, or delete files, use:
 
 ```powershell
+smart-extract.exe --doctor
 smart-extract.exe --explain .\archive.zip
 ```
 
+`--doctor` checks config loading, 7-Zip detection, local learning store access,
+and configured HashDB source/cache status without downloading HTTP mirrors.
 `--explain` prints the budget profile, candidate limit, total candidate count,
 candidate counts by source, and configured HashDB source status. It follows the
 same top-level candidate construction path as extraction, including optional

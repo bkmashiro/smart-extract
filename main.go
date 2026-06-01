@@ -21,6 +21,7 @@ type runDeps struct {
 	waitForKeypress func(msg string)
 	extract         func(path string, opts cmd.ExtractOptions) error
 	explain         func(path string, w io.Writer) error
+	doctor          func(w io.Writer) error
 }
 
 func main() {
@@ -51,6 +52,9 @@ func run(args []string, deps runDeps) int {
 	}
 	if deps.explain == nil {
 		deps.explain = cmd.ExplainArchive
+	}
+	if deps.doctor == nil {
+		deps.doctor = cmd.Doctor
 	}
 	// Strip surrounding quotes from arguments — some Windows shell
 	// expansions (e.g. drag-and-drop or certain "%1" substitutions) can
@@ -230,6 +234,11 @@ func run(args []string, deps runDeps) int {
 		fmt.Fprintln(deps.stdout, "  smart-extract.exe --help         显示帮助")
 		deps.waitForKeypress("")
 
+	case "--doctor":
+		if err := deps.doctor(deps.stdout); err != nil {
+			return reportFatal(deps, "诊断失败: %v", err)
+		}
+
 	case "--debug-log":
 		if len(args) < 3 {
 			return reportFatal(deps, "用法: smart-extract.exe --debug-log <log.txt> <archive> [archive...]")
@@ -301,6 +310,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-enable-source <name>               启用指定 HashDB 源")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache <name>                 清理指定 HashDB 源的本地缓存")
 	fmt.Fprintln(w, "  smart-extract.exe --hashdb-clear-cache --all                  清理所有 HashDB 源的本地缓存")
+	fmt.Fprintln(w, "  smart-extract.exe --doctor                                   检查配置、7-Zip、学习库与 HashDB 源")
 	fmt.Fprintln(w, "  smart-extract.exe --debug-log <log.txt> <archive> [archive...] 输出调试日志（不记录明文密码）")
 	fmt.Fprintln(w, "  smart-extract.exe --explain <archive>                         仅诊断候选来源/HashDB，不解压")
 	fmt.Fprintln(w, "  smart-extract.exe <archive>      解压文件")

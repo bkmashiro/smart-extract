@@ -30,6 +30,9 @@ func newTestDeps() (runDeps, *bytes.Buffer, *bytes.Buffer) {
 		explain: func(path string, w io.Writer) error {
 			return nil
 		},
+		doctor: func(w io.Writer) error {
+			return nil
+		},
 	}
 	return deps, &stdout, &stderr
 }
@@ -326,6 +329,40 @@ func TestRunExplainMissingArgReturnsNonZero(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--explain") {
 		t.Fatalf("expected usage in stderr, got %q", stderr.String())
+	}
+}
+
+func TestRunDoctorDispatchesToDoctorHook(t *testing.T) {
+	setupTempConfig(t)
+	deps, stdout, stderr := newTestDeps()
+	called := false
+	deps.doctor = func(w io.Writer) error {
+		called = true
+		_, _ = fmt.Fprintln(w, "doctor-ok")
+		return nil
+	}
+	if code := run([]string{"--doctor"}, deps); code != 0 {
+		t.Fatalf("exit code=%d stderr=%s", code, stderr.String())
+	}
+	if !called {
+		t.Fatalf("doctor hook was not called")
+	}
+	if !strings.Contains(stdout.String(), "doctor-ok") {
+		t.Fatalf("stdout missing doctor output: %q", stdout.String())
+	}
+}
+
+func TestRunDoctorHookErrorReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+	deps, _, stderr := newTestDeps()
+	deps.doctor = func(w io.Writer) error {
+		return fmt.Errorf("doctor boom")
+	}
+	if code := run([]string{"--doctor"}, deps); code == 0 {
+		t.Fatalf("expected non-zero exit")
+	}
+	if !strings.Contains(stderr.String(), "doctor boom") {
+		t.Fatalf("stderr missing hook error: %q", stderr.String())
 	}
 }
 
