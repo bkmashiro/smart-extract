@@ -29,8 +29,8 @@ type HashDBConfig struct {
 	// Sources is the ordered list of local signed-bundle files to consult.
 	Sources []HashDBSource `yaml:"sources,omitempty"`
 	// Contribute selects local contribution behavior on successful extraction.
-	// "" / "off" (default) disables contribution. "auto" appends silently.
-	// "ask" is reserved for a later UI slice and is treated as off here.
+	// "" / "off" (default) disables contribution. "ask" confirms before
+	// appending to a local sink. "auto" appends silently.
 	Contribute string `yaml:"contribute,omitempty"`
 	// Contribution describes the local target to append to when Contribute
 	// is enabled. No network access is performed.

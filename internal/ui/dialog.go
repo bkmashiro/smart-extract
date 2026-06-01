@@ -284,6 +284,31 @@ func AskDeletePreference() (bool, error) {
 	return true, nil
 }
 
+// AskHashDBContribution asks the user whether to contribute a successful
+// archive/password pair to the configured local HashDB sink. Returns true if
+// the user accepts. Cancel is treated as a decline (false, nil).
+func AskHashDBContribution(archiveName string) (bool, error) {
+	handle, err := AcquireMutex()
+	if err != nil {
+		return false, err
+	}
+	defer ReleaseMutexHandle(handle)
+
+	err = zenity.Question(
+		fmt.Sprintf("将本次成功的密码（加密后）贡献到本地 HashDB？\n文件: %s", archiveName),
+		zenity.Title("智能解压 - HashDB 贡献"),
+		zenity.OKLabel("贡献"),
+		zenity.CancelLabel("跳过"),
+	)
+	if err == zenity.ErrCanceled {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ConfirmPerson prompts user to confirm person identification
 func ConfirmPerson(archiveName, personName string, confidence float64) (bool, error) {
 	handle, err := AcquireMutex()

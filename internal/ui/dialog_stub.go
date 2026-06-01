@@ -49,3 +49,8 @@ func AskDeletePreference() (bool, error) {
 func ConfirmPerson(archiveName, personName string, confidence float64) (bool, error) {
 	return false, nil
 }
+
+// AskHashDBContribution stub for non-Windows: never prompts, never accepts.
+func AskHashDBContribution(archiveName string) (bool, error) {
+	return false, nil
+}

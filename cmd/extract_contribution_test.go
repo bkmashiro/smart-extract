@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -244,6 +245,290 @@ func TestArchiveSuccessRecorderContributionFailureSoftAndLearningProceeds(t *tes
 	}
 	if _, err := os.Stat(bundlePath); !os.IsNotExist(err) {
 		t.Fatalf("bundle file should not exist after soft failure; stat=%v", err)
+	}
+}
+
+func TestArchiveSuccessRecorderAskAcceptedContributes(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	archive := makeContributionTempArchive(t, dir, "ask-yes.zip", "ask-accept-bytes")
+	keyPath := filepath.Join(dir, "askyes", "key.json")
+	bundlePath := filepath.Join(dir, "askyes", "bundle.json")
+	cfg := &config.Config{
+		HashDB: config.HashDBConfig{
+			Contribute: "ask",
+			Contribution: config.HashDBContribution{
+				Type:    "bundle",
+				Path:    bundlePath,
+				KeyPath: keyPath,
+				Source:  "local-private",
+			},
+		},
+	}
+
+	prev := confirmHashDBContribution
+	t.Cleanup(func() { confirmHashDBContribution = prev })
+	calls := 0
+	var calledWith string
+	confirmHashDBContribution = func(archiveName string) (bool, error) {
+		calls++
+		calledWith = archiveName
+		return true, nil
+	}
+
+	recorder := makeArchiveSuccessRecorder(st, cfg)
+	recorder(archive, "ask-accepted-pass")
+
+	if calls != 1 {
+		t.Fatalf("confirmHashDBContribution called %d times, want 1", calls)
+	}
+	if calledWith != "ask-yes.zip" {
+		t.Fatalf("confirmHashDBContribution called with %q, want ask-yes.zip", calledWith)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("key file missing after ask-accept contribution: %v", err)
+	}
+	if _, err := os.Stat(bundlePath); err != nil {
+		t.Fatalf("bundle file missing after ask-accept contribution: %v", err)
+	}
+	pubKey, _, err := hashdb.LoadOrCreateSigningKey(context.Background(), keyPath)
+	if err != nil {
+		t.Fatalf("LoadOrCreateSigningKey: %v", err)
+	}
+	pwds, err := hashdb.LookupFileSource(context.Background(), hashdb.FileSource{
+		Name:      "askyes",
+		Path:      bundlePath,
+		PublicKey: hexEncodeBytes(pubKey),
+	}, archive)
+	if err != nil {
+		t.Fatalf("LookupFileSource: %v", err)
+	}
+	if len(pwds) != 1 || pwds[0] != "ask-accepted-pass" {
+		t.Fatalf("LookupFileSource = %#v, want [ask-accepted-pass]", pwds)
+	}
+}
+
+func TestArchiveSuccessRecorderAskDeclinedSkipsContribution(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	archive := makeContributionTempArchive(t, dir, "ask-no.zip", "ask-decline-bytes")
+	keyPath := filepath.Join(dir, "askno", "key.json")
+	bundlePath := filepath.Join(dir, "askno", "bundle.json")
+	cfg := &config.Config{
+		HashDB: config.HashDBConfig{
+			Contribute: "ask",
+			Contribution: config.HashDBContribution{
+				Type:    "bundle",
+				Path:    bundlePath,
+				KeyPath: keyPath,
+			},
+		},
+	}
+
+	prev := confirmHashDBContribution
+	t.Cleanup(func() { confirmHashDBContribution = prev })
+	calls := 0
+	confirmHashDBContribution = func(archiveName string) (bool, error) {
+		calls++
+		return false, nil
+	}
+
+	recorder := makeArchiveSuccessRecorder(st, cfg)
+	recorder(archive, "declined-pass")
+
+	if calls != 1 {
+		t.Fatalf("confirmHashDBContribution called %d times, want 1", calls)
+	}
+	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+		t.Fatalf("key file should not exist after decline; stat=%v", err)
+	}
+	if _, err := os.Stat(bundlePath); !os.IsNotExist(err) {
+		t.Fatalf("bundle file should not exist after decline; stat=%v", err)
+	}
+	pw, ok, err := st.LookupExact(context.Background(), "ask-no.zip")
+	if err != nil || !ok || pw != "declined-pass" {
+		t.Fatalf("LookupExact=(%q,%v,%v); want declined-pass,true,nil", pw, ok, err)
+	}
+}
+
+func TestArchiveSuccessRecorderAskErrorSkipsContribution(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	archive := makeContributionTempArchive(t, dir, "ask-err.zip", "ask-error-bytes")
+	keyPath := filepath.Join(dir, "askerr", "key.json")
+	bundlePath := filepath.Join(dir, "askerr", "bundle.json")
+	cfg := &config.Config{
+		HashDB: config.HashDBConfig{
+			Contribute: "ask",
+			Contribution: config.HashDBContribution{
+				Type:    "bundle",
+				Path:    bundlePath,
+				KeyPath: keyPath,
+			},
+		},
+	}
+
+	prev := confirmHashDBContribution
+	t.Cleanup(func() { confirmHashDBContribution = prev })
+	confirmHashDBContribution = func(archiveName string) (bool, error) {
+		return false, fmt.Errorf("dialog failed")
+	}
+
+	recorder := makeArchiveSuccessRecorder(st, cfg)
+	recorder(archive, "err-pass")
+
+	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+		t.Fatalf("key file should not exist after ask error; stat=%v", err)
+	}
+	if _, err := os.Stat(bundlePath); !os.IsNotExist(err) {
+		t.Fatalf("bundle file should not exist after ask error; stat=%v", err)
+	}
+	pw, ok, err := st.LookupExact(context.Background(), "ask-err.zip")
+	if err != nil || !ok || pw != "err-pass" {
+		t.Fatalf("LookupExact=(%q,%v,%v); want err-pass,true,nil", pw, ok, err)
+	}
+}
+
+func TestArchiveSuccessRecorderAskEmptyPasswordDoesNotAsk(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	archive := makeContributionTempArchive(t, dir, "ask-empty.zip", "ask-empty-bytes")
+	keyPath := filepath.Join(dir, "askempty", "key.json")
+	bundlePath := filepath.Join(dir, "askempty", "bundle.json")
+	cfg := &config.Config{
+		HashDB: config.HashDBConfig{
+			Contribute: "ask",
+			Contribution: config.HashDBContribution{
+				Type:    "bundle",
+				Path:    bundlePath,
+				KeyPath: keyPath,
+			},
+		},
+	}
+
+	prev := confirmHashDBContribution
+	t.Cleanup(func() { confirmHashDBContribution = prev })
+	calls := 0
+	confirmHashDBContribution = func(archiveName string) (bool, error) {
+		calls++
+		return true, nil
+	}
+
+	recorder := makeArchiveSuccessRecorder(st, cfg)
+	recorder(archive, "")
+
+	if calls != 0 {
+		t.Fatalf("confirmHashDBContribution called %d times for empty password, want 0", calls)
+	}
+	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+		t.Fatalf("key file should not exist for empty password ask; stat=%v", err)
+	}
+	if _, err := os.Stat(bundlePath); !os.IsNotExist(err) {
+		t.Fatalf("bundle file should not exist for empty password ask; stat=%v", err)
+	}
+}
+
+func TestArchiveSuccessRecorderModeOffDoesNotAsk(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	archive := makeContributionTempArchive(t, dir, "off-ask.zip", "off-mode-no-ask")
+	keyPath := filepath.Join(dir, "offask", "key.json")
+	bundlePath := filepath.Join(dir, "offask", "bundle.json")
+	cfg := &config.Config{
+		HashDB: config.HashDBConfig{
+			// Contribute empty => off; must not ask.
+			Contribution: config.HashDBContribution{
+				Type:    "bundle",
+				Path:    bundlePath,
+				KeyPath: keyPath,
+			},
+		},
+	}
+
+	prev := confirmHashDBContribution
+	t.Cleanup(func() { confirmHashDBContribution = prev })
+	calls := 0
+	confirmHashDBContribution = func(archiveName string) (bool, error) {
+		calls++
+		return true, nil
+	}
+
+	recorder := makeArchiveSuccessRecorder(st, cfg)
+	recorder(archive, "any-pass")
+
+	if calls != 0 {
+		t.Fatalf("confirmHashDBContribution called %d times in off mode, want 0", calls)
+	}
+}
+
+func TestArchiveSuccessRecorderAskMissingTargetDoesNotAsk(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	st, err := openLearningStore(&config.Learned{})
+	if err != nil {
+		t.Fatalf("openLearningStore: %v", err)
+	}
+	defer st.Close()
+
+	archive := makeContributionTempArchive(t, dir, "ask-missing.zip", "ask-missing-target")
+	keyPath := filepath.Join(dir, "missing", "key.json")
+	cfg := &config.Config{
+		HashDB: config.HashDBConfig{
+			Contribute: "ask",
+			Contribution: config.HashDBContribution{
+				Type:    "bundle",
+				KeyPath: keyPath,
+				// Path intentionally omitted: this should fail validation before prompting.
+			},
+		},
+	}
+
+	prev := confirmHashDBContribution
+	t.Cleanup(func() { confirmHashDBContribution = prev })
+	calls := 0
+	confirmHashDBContribution = func(archiveName string) (bool, error) {
+		calls++
+		return true, nil
+	}
+
+	recorder := makeArchiveSuccessRecorder(st, cfg)
+	recorder(archive, "any-pass")
+
+	if calls != 0 {
+		t.Fatalf("confirmHashDBContribution called %d times for invalid ask target, want 0", calls)
+	}
+	if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+		t.Fatalf("key file should not exist for invalid ask target; stat=%v", err)
 	}
 }
 

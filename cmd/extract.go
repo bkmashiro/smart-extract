@@ -221,16 +221,23 @@ func makeArchiveSuccessRecorder(st *learningstore.Store, cfg *config.Config) fun
 	}
 }
 
+// confirmHashDBContribution is the seam used by ask-mode contribution to
+// confirm with the user before appending a successful record. Tests override
+// this to assert ask/decline/error paths without touching real dialogs.
+var confirmHashDBContribution = func(archiveName string) (bool, error) {
+	return ui.AskHashDBContribution(archiveName)
+}
+
 // contributeLocalHashDB appends a successful (archive, password) pair to the
-// configured local HashDB contribution target when contribution mode is auto.
-// All failures are soft: a warning is printed and the caller continues. No
-// network access is performed.
+// configured local HashDB contribution target when contribution mode is auto,
+// or when mode is ask and the user accepts. All failures are soft: a warning
+// is printed and the caller continues. No network access is performed.
 func contributeLocalHashDB(cfg *config.Config, archivePath, password string) {
 	if cfg == nil || password == "" {
 		return
 	}
 	mode := strings.ToLower(strings.TrimSpace(cfg.HashDB.Contribute))
-	if mode != "auto" {
+	if mode != "auto" && mode != "ask" {
 		return
 	}
 	c := cfg.HashDB.Contribution
@@ -249,6 +256,31 @@ func contributeLocalHashDB(cfg *config.Config, archivePath, password string) {
 			typ = "bundle"
 		} else if c.BaseDir != "" {
 			typ = "sharded"
+		}
+	}
+	switch typ {
+	case "bundle":
+		if strings.TrimSpace(c.Path) == "" {
+			fmt.Printf("警告：HashDB 贡献跳过：bundle 类型缺少 path\n")
+			return
+		}
+	case "sharded":
+		if strings.TrimSpace(c.BaseDir) == "" {
+			fmt.Printf("警告：HashDB 贡献跳过：sharded 类型缺少 base_dir\n")
+			return
+		}
+	default:
+		fmt.Printf("警告：HashDB 贡献类型未知: %q\n", c.Type)
+		return
+	}
+	if mode == "ask" {
+		ok, err := confirmHashDBContribution(filepath.Base(archivePath))
+		if err != nil {
+			fmt.Printf("警告：HashDB 贡献询问失败: %v\n", err)
+			return
+		}
+		if !ok {
+			return
 		}
 	}
 

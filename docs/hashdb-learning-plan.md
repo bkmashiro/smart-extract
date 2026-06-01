@@ -170,10 +170,9 @@
 **Default:** off.
 
 **Modes:**
-- `off`: no lookup, no upload.
-- `lookup`: query trusted sources only.
-- `ask`: ask before contributing a successful encrypted record.
-- `auto`: advanced opt-in only.
+- `off`: no contribution.
+- `ask`: prompt before appending a successful non-empty password to a configured local sink.
+- `auto`: advanced opt-in; append successful non-empty passwords silently.
 
 **Contribution target:**
 - Local private signed bundle.
@@ -211,7 +210,7 @@ hashdb:
       cache_dir: ./hashdb/cache
       public_key: "<hex ed25519 public key>"
 
-  contribute: auto              # off | auto; ask is reserved and treated as off
+  contribute: ask               # off | ask | auto
   contribution:
     type: sharded               # sharded | bundle
     base_dir: ./hashdb/private
@@ -221,7 +220,7 @@ hashdb:
     shard_prefix_length: 2
 ```
 
-Successful top-level and nested extractions go through the same success callback. When `contribute: auto` is configured, the callback appends an encrypted archive-bound record to the configured local sink. Contribution failures are warnings only; extraction and local SQLite learning still succeed.
+Successful top-level and nested extractions go through the same success callback. When `contribute: ask` is configured, the callback confirms before appending an encrypted archive-bound record to the configured local sink; cancel/skip leaves HashDB untouched while extraction and local SQLite learning still succeed. When `contribute: auto` is configured, the same append happens silently. Contribution failures are warnings only; extraction and local SQLite learning still succeed.
 
 Static HTTP mirror sources may serve gzip-compressed bundles or shards. Bundle sources use `compression: gzip` and optional `sha256` in `hashdb.sources[]`; sharded manifests put `compression: "gzip"` on individual shards and keep `sha256` bound to the compressed mirror bytes. The local cache stores decompressed canonical signed bundle/shard files for lookup.
 
@@ -231,7 +230,6 @@ Source and cache management is implemented: `--hashdb-list-sources` prints each 
 
 ## Remaining Work
 
-- `ask` contribution mode UI; currently parsed but intentionally treated as off.
 - Optional zstd/IPFS/torrent-like snapshot distribution later; gzip-compressed static HTTP bundles/shards are implemented.
 
 ---

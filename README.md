@@ -79,7 +79,7 @@ fallback_passwords:
 hashdb:
   mode: off              # off | lookup
   sources: []            # see examples below
-  contribute: off        # off | auto   (ask is reserved; treated as off)
+  contribute: off        # off | ask | auto
 ```
 
 #### HashDB lookup from a local signed bundle and a local sharded source
@@ -127,12 +127,12 @@ hashdb:
       public_key: "<hex ed25519 public key>"
 ```
 
-#### Auto-contribute successful extractions to a private local sharded source
+#### Contribute successful extractions to a private local sharded source
 
 ```yaml
 hashdb:
   mode: lookup
-  contribute: auto
+  contribute: ask              # ask before each local contribution; use auto for silent opt-in
   contribution:
     type: sharded             # or "bundle"
     base_dir: ./hashdb/private
@@ -141,8 +141,12 @@ hashdb:
     shard_prefix_length: 2
 ```
 
-Contribution is opt-in. Bundle and shard files only contain encrypted records;
-the plaintext password never appears on disk in these files. Use
+Contribution is opt-in. `off` is the default. `ask` shows a confirmation dialog
+before appending each successful non-empty password to the configured local
+bundle/sharded sink; cancel/skip leaves HashDB untouched while normal SQLite
+learning still succeeds. `auto` is advanced opt-in and appends silently. Bundle
+and shard files only contain encrypted records; the plaintext password never
+appears on disk in these files. Use
 `smart-extract.exe --hashdb-public-key ./hashdb/private/signing.key.json` to
 print the hex public key to paste into a matching `hashdb.sources[].public_key`
 entry.
