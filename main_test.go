@@ -1,0 +1,228 @@
+package main
+
+import (
+	"bytes"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/bkmashiro/smart-extract/internal/config"
+)
+
+// newTestDeps returns runDeps with captured stdout/stderr and no-op
+// wait/console hooks. The two buffers it returns are the same ones wired
+// into deps so callers can assert on them.
+func newTestDeps() (runDeps, *bytes.Buffer, *bytes.Buffer) {
+	var stdout, stderr bytes.Buffer
+	deps := runDeps{
+		stdout:          &stdout,
+		stderr:          &stderr,
+		allocConsole:    func() {},
+		waitForKeypress: func(msg string) {},
+	}
+	return deps, &stdout, &stderr
+}
+
+// setupTempConfig initializes the config package against a fresh temp dir
+// so tests do not touch the real config.yaml. It returns the temp dir.
+func setupTempConfig(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	config.Init(dir)
+	config.ReloadAll()
+	return dir
+}
+
+func TestRunHashDBPublicKeyPrintsHexKey(t *testing.T) {
+	dir := setupTempConfig(t)
+	keyPath := filepath.Join(dir, "contrib.key.json")
+
+	deps, stdout, stderr := newTestDeps()
+	code := run([]string{"--hashdb-public-key", keyPath}, deps)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	out := strings.TrimSpace(stdout.String())
+	// Ed25519 public key is 32 bytes → 64 hex chars.
+	if len(out) != 64 {
+		t.Fatalf("expected 64-char hex public key, got %q", out)
+	}
+	if _, err := hex.DecodeString(out); err != nil {
+		t.Fatalf("output is not hex: %v (%q)", err, out)
+	}
+	if _, err := os.Stat(keyPath); err != nil {
+		t.Fatalf("expected key file at %s, err=%v", keyPath, err)
+	}
+
+	// Second invocation should re-load the same key and print the same hex.
+	deps2, stdout2, _ := newTestDeps()
+	if code := run([]string{"--hashdb-public-key", keyPath}, deps2); code != 0 {
+		t.Fatalf("second run exit code = %d", code)
+	}
+	if strings.TrimSpace(stdout2.String()) != out {
+		t.Fatalf("public key not stable: %q vs %q", stdout2.String(), out)
+	}
+}
+
+func TestRunHashDBListSourcesPrintsLocalAndHTTPSources(t *testing.T) {
+	dir := setupTempConfig(t)
+	cacheDir := filepath.Join(dir, "hashdb-cache")
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.HashDB.Mode = "lookup"
+	cfg.HashDB.Sources = []config.HashDBSource{
+		{
+			Name:      "local-bundle",
+			Type:      "bundle",
+			Path:      filepath.Join(dir, "local.bundle.json"),
+			PublicKey: "aa",
+		},
+		{
+			Name:      "mirror-bundle",
+			Type:      "bundle",
+			URL:       "https://example.com/hashdb/shared.bundle.json",
+			CacheDir:  cacheDir,
+			PublicKey: "bb",
+		},
+	}
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	config.ReloadAll()
+
+	deps, stdout, stderr := newTestDeps()
+	code := run([]string{"--hashdb-list-sources"}, deps)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	for _, want := range []string{"local-bundle", "mirror-bundle", "bundle"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in output:\n%s", want, out)
+		}
+	}
+	// HTTP source has no cache dir on disk yet → "missing".
+	if !strings.Contains(out, "missing") {
+		t.Fatalf("expected cache state 'missing' for HTTP source, got:\n%s", out)
+	}
+	// HTTP source URL should be surfaced as the source location.
+	if !strings.Contains(out, "https://example.com/hashdb/shared.bundle.json") {
+		t.Fatalf("expected URL in output, got:\n%s", out)
+	}
+}
+
+func TestRunHashDBClearCacheRemovesNamedCache(t *testing.T) {
+	dir := setupTempConfig(t)
+	cacheDir := filepath.Join(dir, "hashdb-cache")
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.HashDB.Mode = "lookup"
+	cfg.HashDB.Sources = []config.HashDBSource{
+		{Name: "mirror-keep", Type: "bundle", URL: "https://example.com/keep.bundle.json", CacheDir: cacheDir},
+		{Name: "mirror-drop", Type: "bundle", URL: "https://example.com/drop.bundle.json", CacheDir: cacheDir},
+	}
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	config.ReloadAll()
+
+	// Pre-create both cache roots with marker files so we can verify which
+	// one gets removed.
+	keepRoot, err := resolveHashDBCacheRootForTest(t, "mirror-keep")
+	if err != nil {
+		t.Fatalf("resolve keep root: %v", err)
+	}
+	dropRoot, err := resolveHashDBCacheRootForTest(t, "mirror-drop")
+	if err != nil {
+		t.Fatalf("resolve drop root: %v", err)
+	}
+	for _, root := range []string{keepRoot, dropRoot} {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", root, err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "marker"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write marker in %s: %v", root, err)
+		}
+	}
+
+	deps, stdout, stderr := newTestDeps()
+	code := run([]string{"--hashdb-clear-cache", "mirror-drop"}, deps)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "mirror-drop") {
+		t.Fatalf("expected source name in output, got:\n%s", out)
+	}
+	if _, err := os.Stat(dropRoot); !os.IsNotExist(err) {
+		t.Fatalf("drop cache should be gone, stat err=%v", err)
+	}
+	if _, err := os.Stat(keepRoot); err != nil {
+		t.Fatalf("keep cache should be untouched, err=%v", err)
+	}
+}
+
+func TestRunHashDBClearCacheMissingArgReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+
+	deps, stdout, stderr := newTestDeps()
+	code := run([]string{"--hashdb-clear-cache"}, deps)
+	if code == 0 {
+		t.Fatalf("expected non-zero exit code; stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	errOut := stderr.String()
+	if errOut == "" {
+		t.Fatalf("expected error message on stderr, got empty")
+	}
+	if !strings.Contains(errOut, "--hashdb-clear-cache") {
+		t.Fatalf("expected usage hint mentioning --hashdb-clear-cache in stderr, got: %q", errOut)
+	}
+}
+
+// resolveHashDBCacheRootForTest reads the configured source by name and
+// computes the same cache root the cmd helpers would derive. It indirectly
+// exercises cmd.HashDBListSources to avoid duplicating cache-root logic in
+// tests.
+func resolveHashDBCacheRootForTest(t *testing.T, name string) (string, error) {
+	t.Helper()
+	// Reuse the list helper to recover the canonical cache path.
+	deps, stdout, _ := newTestDeps()
+	if code := run([]string{"--hashdb-list-sources"}, deps); code != 0 {
+		t.Fatalf("list-sources exit=%d", code)
+	}
+	out := stdout.String()
+	// Lines look like:
+	//   - <name> (...)
+	//       cache: <path> (missing|present)
+	lines := strings.Split(out, "\n")
+	wantHeader := "- " + name + " "
+	for i, line := range lines {
+		if !strings.HasPrefix(strings.TrimSpace(line), wantHeader) &&
+			!strings.HasPrefix(strings.TrimSpace(line), "- "+name+"(") {
+			continue
+		}
+		for j := i + 1; j < len(lines); j++ {
+			trimmed := strings.TrimSpace(lines[j])
+			if strings.HasPrefix(trimmed, "- ") {
+				break
+			}
+			if strings.HasPrefix(trimmed, "cache:") {
+				rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "cache:"))
+				if idx := strings.LastIndex(rest, " ("); idx >= 0 {
+					return rest[:idx], nil
+				}
+				return rest, nil
+			}
+		}
+	}
+	t.Fatalf("did not find cache line for %q in:\n%s", name, out)
+	return "", nil
+}
