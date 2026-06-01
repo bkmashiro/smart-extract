@@ -98,7 +98,13 @@ func (s *Store) AddObservation(ctx context.Context, obs PasswordObservation) (in
 	if successAt.IsZero() {
 		successAt = time.Now().UTC()
 	}
-	res, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin password observation: %w", err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `
 		INSERT INTO password_observation (
 			archive_path, archive_name, parent_dir, password, source, archive_size,
 			root_session_id, parent_archive, depth, success_at
@@ -111,6 +117,21 @@ func (s *Store) AddObservation(ctx context.Context, obs PasswordObservation) (in
 	id, err := res.LastInsertId()
 	if err != nil {
 		return 0, fmt.Errorf("read observation id: %w", err)
+	}
+	if obs.Password != "" {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO password_dict (password, total_uses, source, updated_at)
+			VALUES (?, 1, ?, ?)
+			ON CONFLICT(password) DO UPDATE SET
+				total_uses = total_uses + 1,
+				source = excluded.source,
+				updated_at = excluded.updated_at
+		`, obs.Password, obs.Source, timeString(successAt)); err != nil {
+			return 0, fmt.Errorf("update password dictionary: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit password observation: %w", err)
 	}
 	return id, nil
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,9 +9,11 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/bkmashiro/smart-extract/internal/candidates"
 	"github.com/bkmashiro/smart-extract/internal/config"
 	"github.com/bkmashiro/smart-extract/internal/extractor"
 	"github.com/bkmashiro/smart-extract/internal/ml"
+	learningstore "github.com/bkmashiro/smart-extract/internal/store"
 	"github.com/bkmashiro/smart-extract/internal/ui"
 )
 
@@ -51,8 +54,16 @@ func Extract(archivePath string) error {
 
 	archiveName := filepath.Base(archivePath)
 
+	learningStore, err := openLearningStore(learned)
+	if err != nil {
+		fmt.Printf("警告：SQLite 学习库不可用，回退到旧学习数据: %v\n", err)
+	} else {
+		defer learningStore.Close()
+	}
+
 	// Build password provider
 	provider := newPasswordProvider(archivePath, archiveName, cfg, learned)
+	provider.candidateSource = learningStore
 
 	// Determine the person for this file
 	person, err := provider.identifyPerson()
@@ -69,6 +80,7 @@ func Extract(archivePath string) error {
 		TryPassword: func(ap string) ([]string, error) {
 			// For nested archives, create a sub-provider
 			subProvider := newPasswordProvider(ap, filepath.Base(ap), cfg, learned)
+			subProvider.candidateSource = learningStore
 			person2, _ := subProvider.identifyPerson()
 			subProvider.resolvedPerson = person2
 			return subProvider.getPasswords(ap)
@@ -81,10 +93,13 @@ func Extract(archivePath string) error {
 	outDir, successPwd, err := extractor.RecursiveExtract(archivePath, opts, 0)
 	if err != nil {
 		// All passwords failed — ask user
-		return handleUnknownPassword(archivePath, archiveName, sevenZipPath, cfg, learned, opts)
+		return handleUnknownPassword(archivePath, archiveName, sevenZipPath, cfg, learned, learningStore, opts)
 	}
 
 	fmt.Printf("\n✓ 解压完成 → %s\n", filepath.Base(outDir))
+	if err := recordLearningSuccess(learningStore, archivePath, successPwd, "auto_candidate"); err != nil {
+		fmt.Printf("警告：保存 SQLite 学习记录失败: %v\n", err)
+	}
 
 	// Record success
 	if person != "" {
@@ -111,11 +126,12 @@ func Extract(archivePath string) error {
 
 // passwordProvider builds ordered password lists for a given archive
 type passwordProvider struct {
-	archivePath    string
-	archiveName    string
-	cfg            *config.Config
-	learned        *config.Learned
-	resolvedPerson string
+	archivePath     string
+	archiveName     string
+	cfg             *config.Config
+	learned         *config.Learned
+	candidateSource candidates.Source
+	resolvedPerson  string
 }
 
 func newPasswordProvider(archivePath, archiveName string, cfg *config.Config, learned *config.Learned) *passwordProvider {
@@ -125,6 +141,48 @@ func newPasswordProvider(archivePath, archiveName string, cfg *config.Config, le
 		cfg:         cfg,
 		learned:     learned,
 	}
+}
+
+func openLearningStore(learned *config.Learned) (*learningstore.Store, error) {
+	st, err := learningstore.Open(config.LearningStorePath())
+	if err != nil {
+		return nil, err
+	}
+	if err := st.MigrateLearned(context.Background(), learned); err != nil {
+		_ = st.Close()
+		return nil, err
+	}
+	return st, nil
+}
+
+func recordLearningSuccess(st *learningstore.Store, archivePath, password, source string) error {
+	if st == nil || password == "" {
+		return nil
+	}
+	if source == "" {
+		source = "extract_success"
+	}
+	archiveName := filepath.Base(archivePath)
+	if err := st.SaveExact(context.Background(), learningstore.ExactCacheEntry{
+		ArchiveKey: archiveName,
+		Password:   password,
+		Source:     source,
+	}); err != nil {
+		return err
+	}
+	var size int64
+	if info, err := os.Stat(archivePath); err == nil {
+		size = info.Size()
+	}
+	_, err := st.AddObservation(context.Background(), learningstore.PasswordObservation{
+		ArchivePath: archivePath,
+		ArchiveName: archiveName,
+		ParentDir:   filepath.Dir(archivePath),
+		Password:    password,
+		Source:      source,
+		ArchiveSize: size,
+	})
+	return err
 }
 
 // identifyPerson determines which person this file belongs to
@@ -165,11 +223,92 @@ func (p *passwordProvider) identifyPerson() (string, error) {
 	return "", nil
 }
 
+func (p *passwordProvider) legacyStaticPasswords() []string {
+	cfg := p.cfg
+	learned := p.learned
+	var passwords []string
+	seen := make(map[string]bool)
+	addPwd := func(pw string) {
+		if !seen[pw] {
+			seen[pw] = true
+			passwords = append(passwords, pw)
+		}
+	}
+
+	if p.resolvedPerson != "" {
+		pwSet := make(map[string]bool)
+		var personPasswords []string
+		person := cfg.People[p.resolvedPerson]
+		if person != nil {
+			for _, pw := range person.Passwords {
+				if !pwSet[pw] {
+					pwSet[pw] = true
+					personPasswords = append(personPasswords, pw)
+				}
+			}
+		}
+		if stats, ok := learned.PersonStats[p.resolvedPerson]; ok {
+			for pw := range stats {
+				if !pwSet[pw] {
+					pwSet[pw] = true
+					personPasswords = append(personPasswords, pw)
+				}
+			}
+		}
+		if len(personPasswords) > 0 {
+			ranked := ml.RankPasswordsThompson(p.resolvedPerson, personPasswords, learned)
+			for _, r := range ranked {
+				addPwd(r.Password)
+			}
+		}
+	}
+
+	type personEntry struct {
+		name   string
+		person *config.Person
+	}
+	var alwaysTryPeople []personEntry
+	for name, person := range cfg.People {
+		if person.MatchMode == "always_try" && name != p.resolvedPerson {
+			alwaysTryPeople = append(alwaysTryPeople, personEntry{name, person})
+		}
+	}
+	sort.Slice(alwaysTryPeople, func(i, j int) bool {
+		return alwaysTryPeople[i].person.Priority < alwaysTryPeople[j].person.Priority
+	})
+	for _, pe := range alwaysTryPeople {
+		if len(pe.person.Passwords) > 0 {
+			ranked := ml.RankPasswordsThompson(pe.name, pe.person.Passwords, learned)
+			for _, r := range ranked {
+				addPwd(r.Password)
+			}
+		}
+	}
+	return passwords
+}
+
 // getPasswords returns the ordered password list for an archive
 func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 	archiveName := filepath.Base(archivePath)
 	cfg := p.cfg
 	learned := p.learned
+
+	if p.candidateSource != nil {
+		built, err := candidates.Build(context.Background(), candidates.Request{
+			ArchivePath:       archivePath,
+			ArchiveKey:        archiveName,
+			StaticPasswords:   p.legacyStaticPasswords(),
+			FallbackPasswords: cfg.FallbackPasswords,
+		}, p.candidateSource)
+		if err != nil {
+			return nil, err
+		}
+		passwords := make([]string, 0, len(built))
+		for _, candidate := range built {
+			passwords = append(passwords, candidate.Password)
+		}
+		return passwords, nil
+	}
 
 	var passwords []string
 	seen := make(map[string]bool)
@@ -265,6 +404,7 @@ func handleUnknownPassword(
 	archivePath, archiveName, sevenZipPath string,
 	cfg *config.Config,
 	learned *config.Learned,
+	learningStore *learningstore.Store,
 	opts extractor.RecursiveExtractOptions,
 ) error {
 	fmt.Printf("\n✗ 所有密码均失败\n")
@@ -283,6 +423,9 @@ func handleUnknownPassword(
 	}
 
 	fmt.Printf("✓ 解压成功\n")
+	if err := recordLearningSuccess(learningStore, archivePath, password, "user_input"); err != nil {
+		fmt.Printf("警告：保存 SQLite 学习记录失败: %v\n", err)
+	}
 
 	// Step 1: Check if this password already belongs to a known person
 	existingPerson := config.FindPersonByPassword(password)

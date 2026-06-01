@@ -17,6 +17,7 @@ const (
 	SourceSession    = "session"
 	SourcePattern    = "pattern"
 	SourceDictionary = "dictionary"
+	SourceStatic     = "static"
 	SourceEmpty      = "empty"
 	SourceFallback   = "fallback"
 )
@@ -33,6 +34,7 @@ type Request struct {
 	ArchivePath       string
 	ArchiveKey        string
 	ParentPassword    string
+	StaticPasswords   []string
 	FallbackPasswords []string
 	DictionaryLimit   int
 	CandidateLimit    int
@@ -113,6 +115,10 @@ func Build(ctx context.Context, req Request, source Source) ([]Candidate, error)
 		for _, password := range passwords {
 			builder.add(Candidate{Password: password.Password, Source: SourceDictionary, Score: 1})
 		}
+	}
+
+	for _, password := range req.StaticPasswords {
+		builder.add(Candidate{Password: password, Source: SourceStatic, Score: 0.5})
 	}
 
 	builder.add(Candidate{Password: "", Source: SourceEmpty, Score: 0})

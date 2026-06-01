@@ -82,6 +82,36 @@ func TestSQLiteStoreAppendsRawObservations(t *testing.T) {
 	}
 }
 
+func TestSQLiteStoreObservationUpdatesPasswordDictionary(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	defer st.Close()
+
+	for _, obs := range []PasswordObservation{
+		{ArchiveName: "a.zip", ParentDir: `/downloads`, Password: "shared-pass", Source: "test"},
+		{ArchiveName: "b.zip", ParentDir: `/downloads`, Password: "shared-pass", Source: "test"},
+		{ArchiveName: "c.zip", ParentDir: `/downloads`, Password: "rare-pass", Source: "test"},
+	} {
+		if _, err := st.AddObservation(ctx, obs); err != nil {
+			t.Fatalf("AddObservation: %v", err)
+		}
+	}
+
+	stats, err := st.TopPasswords(ctx, 2)
+	if err != nil {
+		t.Fatalf("TopPasswords: %v", err)
+	}
+	if len(stats) != 2 {
+		t.Fatalf("len(TopPasswords) = %d, want 2: %#v", len(stats), stats)
+	}
+	if stats[0].Password != "shared-pass" || stats[0].TotalUses != 2 {
+		t.Fatalf("top password = %+v, want shared-pass with 2 uses", stats[0])
+	}
+	if stats[1].Password != "rare-pass" || stats[1].TotalUses != 1 {
+		t.Fatalf("second password = %+v, want rare-pass with 1 use", stats[1])
+	}
+}
+
 func TestSQLiteStoreReturnsRecentSessionPasswordsByParentDir(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)

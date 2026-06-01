@@ -35,11 +35,11 @@ type Preferences struct {
 
 // Learned represents learned.yaml
 type Learned struct {
-	Exact            map[string]string                     `yaml:"exact"`
-	PersonStats      map[string]map[string]*BetaStats      `yaml:"person_stats"`
-	PersonFilenames  map[string][]string                   `yaml:"person_filenames"`
-	PasswordHitCount map[string]int                        `yaml:"password_hit_count,omitempty"`
-	Preferences      Preferences                           `yaml:"preferences"`
+	Exact            map[string]string                `yaml:"exact"`
+	PersonStats      map[string]map[string]*BetaStats `yaml:"person_stats"`
+	PersonFilenames  map[string][]string              `yaml:"person_filenames"`
+	PasswordHitCount map[string]int                   `yaml:"password_hit_count,omitempty"`
+	Preferences      Preferences                      `yaml:"preferences"`
 }
 
 // BetaStats stores Thompson Sampling parameters
@@ -60,6 +60,15 @@ var (
 func Init(baseDir string) {
 	configPath = filepath.Join(baseDir, "config.yaml")
 	learnedPath = filepath.Join(baseDir, "learned.yaml")
+}
+
+// LearningStorePath returns the SQLite learning database path next to learned.yaml.
+func LearningStorePath() string {
+	baseDir := filepath.Dir(learnedPath)
+	if baseDir == "." || baseDir == "" {
+		baseDir = "."
+	}
+	return filepath.Join(baseDir, "learning.db")
 }
 
 // LoadConfig loads config.yaml, creating defaults if missing

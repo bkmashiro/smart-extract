@@ -22,6 +22,14 @@ func setupTestDir(t *testing.T) string {
 	return dir
 }
 
+func TestLearningStorePathLivesNextToLearnedYAML(t *testing.T) {
+	dir := setupTestDir(t)
+	want := filepath.Join(dir, "learning.db")
+	if got := LearningStorePath(); got != want {
+		t.Fatalf("LearningStorePath() = %q, want %q", got, want)
+	}
+}
+
 func TestPreferences_DefaultUnset(t *testing.T) {
 	setupTestDir(t)
 
