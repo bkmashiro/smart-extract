@@ -80,11 +80,12 @@ func Extract(archivePath string) error {
 		MaxDepth:          10,
 		MaxParallelProbes: cfg.MaxParallelProbes,
 		BudgetProfile:     budget.ParseProfile(cfg.ProbeBudgetProfile),
-		TryPassword: func(ap string) ([]string, error) {
+		TryPassword: func(ap, parentPassword string) ([]string, error) {
 			// For nested archives, create a sub-provider
 			subProvider := newPasswordProvider(ap, filepath.Base(ap), cfg, learned)
 			subProvider.candidateSource = learningStore
 			subProvider.sevenZipPath = sevenZipPath
+			subProvider.parentPassword = parentPassword
 			person2, _ := subProvider.identifyPerson()
 			subProvider.resolvedPerson = person2
 			return subProvider.getPasswords(ap)
@@ -137,6 +138,7 @@ type passwordProvider struct {
 	candidateSource candidates.Source
 	resolvedPerson  string
 	sevenZipPath    string
+	parentPassword  string
 }
 
 func newPasswordProvider(archivePath, archiveName string, cfg *config.Config, learned *config.Learned) *passwordProvider {
@@ -303,6 +305,7 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 		built, err := candidates.Build(context.Background(), candidates.Request{
 			ArchivePath:       archivePath,
 			ArchiveKey:        archiveName,
+			ParentPassword:    p.parentPassword,
 			StaticPasswords:   p.legacyStaticPasswords(),
 			FallbackPasswords: cfg.FallbackPasswords,
 			CandidateLimit:    rec.CandidateLimit,
@@ -483,7 +486,9 @@ func handleUnknownPassword(
 	// Flatten and recurse nested archives
 	_ = extractor.FlattenSingleFolder(outputDir)
 
-	_ = walkNested(outputDir, opts)
+	childOpts := opts
+	childOpts.ParentPassword = password
+	_ = walkNested(outputDir, childOpts)
 
 	fmt.Printf("\n✓ 解压完成 → %s\n", filepath.Base(outputDir))
 

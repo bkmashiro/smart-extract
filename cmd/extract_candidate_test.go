@@ -93,6 +93,32 @@ func TestPasswordProviderKeepsLegacyPersonPasswordsWhenLearningSourceEnabled(t *
 	}
 }
 
+func TestPasswordProviderPrioritizesParentPasswordForNestedArchive(t *testing.T) {
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider("/downloads/nested.zip", "nested.zip", cfg, learned)
+	provider.candidateSource = fakeCandidateSource{
+		exact: map[string]string{"nested.zip": "exact-pass"},
+	}
+	provider.parentPassword = "parent-pass"
+
+	got, err := provider.getPasswords("/downloads/nested.zip")
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	wantPrefix := []string{"parent-pass", "exact-pass"}
+	if len(got) < len(wantPrefix) || !reflect.DeepEqual(got[:len(wantPrefix)], wantPrefix) {
+		t.Fatalf("password candidates = %#v, want prefix %#v", got, wantPrefix)
+	}
+}
+
 func makePasswordList(prefix string, n int) []string {
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {

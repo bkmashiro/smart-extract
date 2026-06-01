@@ -20,9 +20,13 @@ type RecursiveExtractOptions struct {
 	// BudgetProfile controls cost-aware candidate and probe budgets.
 	// The zero value is budget.ProfileNormal for backwards compatibility.
 	BudgetProfile budget.Profile
+	// ParentPassword is the password that successfully opened the enclosing
+	// archive, if this archive was discovered during recursive extraction.
+	ParentPassword string
 	// TryPassword is called when an archive needs a password attempt.
-	// It should return a list of passwords to try, in order.
-	TryPassword func(archivePath string) ([]string, error)
+	// It should return a list of passwords to try, in order. parentPassword is
+	// empty for top-level archives and set for nested archives.
+	TryPassword func(archivePath, parentPassword string) ([]string, error)
 	// OnProgress is called with progress messages
 	OnProgress func(msg string)
 }
@@ -53,7 +57,7 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 
 	// Get passwords to try after format detection so per-archive budgets can
 	// be applied consistently, including nested archives.
-	passwords, err := opts.TryPassword(archivePath)
+	passwords, err := opts.TryPassword(archivePath, opts.ParentPassword)
 	if err != nil {
 		return "", "", err
 	}
@@ -100,14 +104,21 @@ func RecursiveExtract(archivePath string, opts RecursiveExtractOptions, depth in
 		}
 	}
 
-	// Recursively extract nested archives
-	if err := walkAndExtract(outputDir, opts, depth+1); err != nil {
+	// Recursively extract nested archives. Nested archives should try the
+	// enclosing archive's successful password first.
+	childOpts := childOptionsWithParentPassword(opts, successPwd)
+	if err := walkAndExtract(outputDir, childOpts, depth+1); err != nil {
 		if opts.OnProgress != nil {
 			opts.OnProgress(fmt.Sprintf("警告：递归解压失败: %v", err))
 		}
 	}
 
 	return outputDir, successPwd, nil
+}
+
+func childOptionsWithParentPassword(opts RecursiveExtractOptions, parentPassword string) RecursiveExtractOptions {
+	opts.ParentPassword = parentPassword
+	return opts
 }
 
 func budgetedMaxParallel(opts RecursiveExtractOptions, af ArchiveFormat, archiveSizeBytes int64) int {

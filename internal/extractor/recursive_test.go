@@ -45,3 +45,14 @@ func TestBudgetedMaxParallelEmptyProfileTreatedAsNormal(t *testing.T) {
 		t.Fatalf("MaxParallelProbes must be >=1, got %d", got)
 	}
 }
+
+func TestChildOptionsCarrySuccessfulParentPassword(t *testing.T) {
+	original := RecursiveExtractOptions{ParentPassword: "outer"}
+	child := childOptionsWithParentPassword(original, "inner-success")
+	if child.ParentPassword != "inner-success" {
+		t.Fatalf("child ParentPassword = %q, want inner-success", child.ParentPassword)
+	}
+	if original.ParentPassword != "outer" {
+		t.Fatalf("original ParentPassword mutated to %q", original.ParentPassword)
+	}
+}
