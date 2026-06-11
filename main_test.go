@@ -475,6 +475,40 @@ func TestRunDoctorJSONHookErrorReturnsNonZero(t *testing.T) {
 	}
 }
 
+func TestRunServeHelperDispatchesToServeHelperHook(t *testing.T) {
+	setupTempConfig(t)
+	deps, stdout, stderr := newTestDeps()
+	called := false
+	deps.serveHelper = func(w io.Writer) error {
+		called = true
+		_, _ = fmt.Fprintln(w, "helper started")
+		return nil
+	}
+	if code := run([]string{"--serve-helper"}, deps); code != 0 {
+		t.Fatalf("exit code=%d stderr=%s", code, stderr.String())
+	}
+	if !called {
+		t.Fatalf("serveHelper hook was not called")
+	}
+	if !strings.Contains(stdout.String(), "helper started") {
+		t.Fatalf("stdout missing helper output: %q", stdout.String())
+	}
+}
+
+func TestRunServeHelperHookErrorReturnsNonZero(t *testing.T) {
+	setupTempConfig(t)
+	deps, _, stderr := newTestDeps()
+	deps.serveHelper = func(w io.Writer) error {
+		return fmt.Errorf("serve boom")
+	}
+	if code := run([]string{"--serve-helper"}, deps); code == 0 {
+		t.Fatalf("expected non-zero exit")
+	}
+	if !strings.Contains(stderr.String(), "serve boom") {
+		t.Fatalf("stderr missing hook error: %q", stderr.String())
+	}
+}
+
 func TestRunHashDBDisableSourceMissingArgReturnsNonZero(t *testing.T) {
 	setupTempConfig(t)
 

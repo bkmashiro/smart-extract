@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bkmashiro/smart-extract/internal/config"
+	"github.com/bkmashiro/smart-extract/internal/helper"
 )
 
 func TestExplainArchiveReportsCandidateCountsWithoutPasswords(t *testing.T) {
@@ -112,6 +115,53 @@ func TestExplainArchiveJSONReportsCandidatesWithoutPasswords(t *testing.T) {
 		if strings.Contains(raw, secret) {
 			t.Fatalf("explain JSON leaked plaintext password %q:\n%s", secret, raw)
 		}
+	}
+}
+
+func TestExplainArchiveIncludesLocalHelperCandidates(t *testing.T) {
+	dir := t.TempDir()
+	config.Init(dir)
+	config.ReloadAll()
+	archivePath := filepath.Join(dir, "demo.zip")
+	if err := os.WriteFile(archivePath, []byte("fake archive bytes"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	store := helper.NewMemoryStore(time.Minute)
+	if _, err := store.Add(helper.CandidateBundle{
+		SchemaVersion:   1,
+		ArchiveFilename: "demo.zip",
+		Candidates:      []helper.CandidatePassword{{Value: "helper-secret", Source: "page_text", Score: 0.9}},
+	}); err != nil {
+		t.Fatalf("seed helper: %v", err)
+	}
+	server := httptest.NewServer(helper.NewHandler(store, helper.Options{BearerToken: "test-token"}))
+	defer server.Close()
+
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	cfg.LocalHelper = config.LocalHelperConfig{Mode: "lookup", Endpoint: server.URL, Token: "test-token"}
+	if err := config.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := ExplainArchiveJSON(archivePath, &out); err != nil {
+		t.Fatalf("ExplainArchiveJSON: %v", err)
+	}
+	raw := out.String()
+	var got map[string]any
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("output is not valid JSON: %v; out=%s", err, raw)
+	}
+	sources := got["candidate_sources"].(map[string]any)
+	if sources["helper"].(float64) != 1 {
+		t.Fatalf("helper candidate count = %v, want 1; raw=%s", sources["helper"], raw)
+	}
+	if strings.Contains(raw, "helper-secret") {
+		t.Fatalf("explain JSON leaked helper password:\n%s", raw)
 	}
 }
 

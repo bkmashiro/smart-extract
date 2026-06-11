@@ -205,6 +205,29 @@ func TestLoadConfigParsesProbeBudgetProfile(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesLocalHelper(t *testing.T) {
+	dir := setupTestDir(t)
+
+	yamlContent := []byte("local_helper:\n  mode: lookup\n  endpoint: http://127.0.0.1:17321\n  token_path: ./local-helper.token\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), yamlContent, 0644); err != nil {
+		t.Fatalf("write config.yaml: %v", err)
+	}
+
+	c, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if c.LocalHelper.Mode != "lookup" {
+		t.Fatalf("LocalHelper.Mode = %q, want lookup", c.LocalHelper.Mode)
+	}
+	if c.LocalHelper.Endpoint != "http://127.0.0.1:17321" {
+		t.Fatalf("LocalHelper.Endpoint = %q", c.LocalHelper.Endpoint)
+	}
+	if c.LocalHelper.TokenPath != "./local-helper.token" {
+		t.Fatalf("LocalHelper.TokenPath = %q", c.LocalHelper.TokenPath)
+	}
+}
+
 func TestLoadConfigProbeBudgetProfileOptional(t *testing.T) {
 	dir := setupTestDir(t)
 

@@ -110,11 +110,13 @@ func buildExplainResult(archivePath string, suppressWarnings bool) (explainResul
 	total := 0
 	hashDBMatches := 0
 	if learningStore != nil {
+		helperPasswords := provider.helperPasswords(context.Background(), archivePath)
 		hashDBPasswords := provider.hashDBPasswords(context.Background(), archivePath)
 		hashDBMatches = len(hashDBPasswords)
 		built, err := candidates.Build(context.Background(), candidates.Request{
 			ArchivePath:       archivePath,
 			ArchiveKey:        archiveName,
+			HelperPasswords:   helperPasswords,
 			HashDBPasswords:   hashDBPasswords,
 			StaticPasswords:   provider.staticPasswords(false),
 			FallbackPasswords: cfg.FallbackPasswords,
