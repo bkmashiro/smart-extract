@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bkmashiro/smart-extract/internal/config"
+	"github.com/bkmashiro/smart-extract/internal/helper"
 	"github.com/bkmashiro/smart-extract/internal/store"
 )
 
@@ -40,6 +43,52 @@ func (fakeCandidateSource) TopPasswords(ctx context.Context, limit int) ([]store
 	return nil, nil
 }
 
+func TestPasswordProviderUsesLocalHelperCandidatesAfterExactCache(t *testing.T) {
+	store := helper.NewMemoryStore(time.Minute)
+	if _, err := store.Add(helper.CandidateBundle{
+		SchemaVersion:   1,
+		Source:          "boltqr",
+		ArchiveFilename: "password=filename-pass.zip",
+		Candidates: []helper.CandidatePassword{
+			{Value: "helper-pass", Source: "page_text", Score: 0.9},
+			{Value: "exact-pass", Source: "duplicate", Score: 0.1},
+		},
+	}); err != nil {
+		t.Fatalf("seed helper: %v", err)
+	}
+	server := httptest.NewServer(helper.NewHandler(store, helper.Options{BearerToken: "test-token"}))
+	defer server.Close()
+
+	cfg := &config.Config{
+		People:            map[string]*config.Person{},
+		FallbackPasswords: []string{"fallback-pass"},
+		LocalHelper: config.LocalHelperConfig{
+			Mode:     "lookup",
+			Endpoint: server.URL,
+			Token:    "test-token",
+		},
+	}
+	learned := &config.Learned{
+		Exact:           map[string]string{},
+		PersonStats:     map[string]map[string]*config.BetaStats{},
+		PersonFilenames: map[string][]string{},
+	}
+	provider := newPasswordProvider("/downloads/password=filename-pass.zip", "password=filename-pass.zip", cfg, learned)
+	provider.candidateSource = fakeCandidateSource{
+		exact:    map[string]string{"password=filename-pass.zip": "exact-pass"},
+		sessions: map[string][]string{"/downloads": {"session-pass"}},
+	}
+
+	got, err := provider.getPasswords("/downloads/password=filename-pass.zip")
+	if err != nil {
+		t.Fatalf("getPasswords: %v", err)
+	}
+	want := []string{"exact-pass", "helper-pass", "filename-pass", "session-pass", "", "fallback-pass"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("password candidates = %#v, want %#v", got, want)
+	}
+}
+
 func TestPasswordProviderUsesLearningCandidateSourceBeforeLegacyFallbacks(t *testing.T) {
 	cfg := &config.Config{
 		People:            map[string]*config.Person{},
@@ -63,6 +112,26 @@ func TestPasswordProviderUsesLearningCandidateSourceBeforeLegacyFallbacks(t *tes
 	want := []string{"exact-pass", "filename-pass", "session-pass", "", "fallback-pass"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("password candidates = %#v, want %#v", got, want)
+	}
+}
+
+func TestPasswordProviderHelperDebugLogRedactsEndpointSecrets(t *testing.T) {
+	cfg := &config.Config{
+		People: map[string]*config.Person{},
+		LocalHelper: config.LocalHelperConfig{
+			Mode:     "lookup",
+			Endpoint: "http://127.0.0.1:1/?password=endpoint-secret",
+		},
+	}
+	learned := &config.Learned{Exact: map[string]string{}, PersonStats: map[string]map[string]*config.BetaStats{}, PersonFilenames: map[string][]string{}}
+	var log bytes.Buffer
+	provider := newPasswordProvider("/downloads/a.zip", "a.zip", cfg, learned)
+	provider.debug = newDebugLogger(&log)
+
+	_ = provider.helperPasswords(context.Background(), "/downloads/a.zip")
+
+	if strings.Contains(log.String(), "endpoint-secret") {
+		t.Fatalf("helper debug log leaked endpoint secret: %s", log.String())
 	}
 }
 

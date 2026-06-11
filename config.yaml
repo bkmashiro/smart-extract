@@ -19,3 +19,9 @@ fallback_passwords:
   - "12345678"
   - "qwerty"
   - ""   # empty = try without password
+
+# Optional BoltQR/browser page-candidate handoff.
+local_helper:
+  mode: off        # off | lookup
+  endpoint: http://127.0.0.1:17321
+  token_path: ./local-helper.token

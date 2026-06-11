@@ -10,8 +10,9 @@ A Windows tool that adds a right-click context menu entry to intelligently extra
   exact archive cache, raw password observations, derived pattern rules,
   session/sibling context, and a local password dictionary.
 - Deterministic candidate builder ordering parent-recursive → exact cache →
-  filename/parent extraction → session context → pattern rules → online stats →
-  local dictionary → empty → config fallback.
+  local helper (QR/browser page candidates) → HashDB → filename/parent
+  extraction → session context → pattern rules → online stats → local
+  dictionary → empty → config fallback.
 - Cost budget profiles (`light` / `normal` / `aggressive`) and bounded
   parallelism for fast, predictable probing, including a cross-process
   lock-file throttle so Explorer multi-select launches do not each consume
@@ -52,6 +53,7 @@ smart-extract.exe --uninstall   Remove right-click menu
 smart-extract.exe --hashdb-public-key ./hashdb/private/signing.key.json
 smart-extract.exe --doctor
 smart-extract.exe --doctor-json
+smart-extract.exe --serve-helper
 smart-extract.exe --debug-log .\smart-extract-debug.log <archive>
 smart-extract.exe --explain <archive>
 smart-extract.exe --explain-json <archive>
@@ -79,6 +81,12 @@ people:
 fallback_passwords:
   - "123456"
   - ""
+
+# Optional BoltQR/browser page-candidate handoff. See docs/local-helper-protocol-v1.md.
+local_helper:
+  mode: off        # off | lookup
+  endpoint: http://127.0.0.1:17321
+  token_path: ./local-helper.token
 
 # Optional. HashDB is off by default and never touches the network.
 hashdb:

@@ -43,6 +43,9 @@ func newTestDeps() (runDeps, *bytes.Buffer, *bytes.Buffer) {
 		doctorJSON: func(w io.Writer) error {
 			return nil
 		},
+		serveHelper: func(w io.Writer) error {
+			return nil
+		},
 	}
 	return deps, &stdout, &stderr
 }

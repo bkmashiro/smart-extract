@@ -24,6 +24,7 @@ import (
 	"github.com/bkmashiro/smart-extract/internal/config"
 	"github.com/bkmashiro/smart-extract/internal/extractor"
 	"github.com/bkmashiro/smart-extract/internal/hashdb"
+	"github.com/bkmashiro/smart-extract/internal/helper"
 	"github.com/bkmashiro/smart-extract/internal/learning"
 	"github.com/bkmashiro/smart-extract/internal/ml"
 	learningstore "github.com/bkmashiro/smart-extract/internal/store"
@@ -456,11 +457,13 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 
 	if p.candidateSource != nil {
 		rec := p.budgetRecommendation(archivePath)
+		helperPasswords := p.helperPasswords(context.Background(), archivePath)
 		hashDBPasswords := p.hashDBPasswords(context.Background(), archivePath)
 		built, err := candidates.Build(context.Background(), candidates.Request{
 			ArchivePath:       archivePath,
 			ArchiveKey:        archiveName,
 			ParentPassword:    p.parentPassword,
+			HelperPasswords:   helperPasswords,
 			HashDBPasswords:   hashDBPasswords,
 			StaticPasswords:   p.staticPasswords(false),
 			FallbackPasswords: cfg.FallbackPasswords,
@@ -475,7 +478,7 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 			passwords = append(passwords, candidate.Password)
 			counts[candidate.Source]++
 		}
-		p.debug.Logf("candidate summary archive=%s profile=%s limit=%d total=%d hashdb_matches=%d %s", archiveName, debugProfileName(cfg.ProbeBudgetProfile), rec.CandidateLimit, len(built), len(hashDBPasswords), sortedCountSummary(counts))
+		p.debug.Logf("candidate summary archive=%s profile=%s limit=%d total=%d helper_matches=%d hashdb_matches=%d %s", archiveName, debugProfileName(cfg.ProbeBudgetProfile), rec.CandidateLimit, len(built), len(helperPasswords), len(hashDBPasswords), sortedCountSummary(counts))
 		return passwords, nil
 	}
 
@@ -573,6 +576,56 @@ func (p *passwordProvider) getPasswords(archivePath string) ([]string, error) {
 
 	p.debug.Logf("candidate summary archive=%s source=legacy total=%d", archiveName, len(passwords))
 	return passwords, nil
+}
+
+func (p *passwordProvider) helperPasswords(ctx context.Context, archivePath string) []string {
+	if p == nil || p.cfg == nil || !strings.EqualFold(strings.TrimSpace(p.cfg.LocalHelper.Mode), "lookup") {
+		if p != nil {
+			p.debug.Logf("helper summary mode=off")
+		}
+		return nil
+	}
+	token := strings.TrimSpace(p.cfg.LocalHelper.Token)
+	if token == "" && strings.TrimSpace(p.cfg.LocalHelper.TokenPath) != "" {
+		data, err := os.ReadFile(strings.TrimSpace(p.cfg.LocalHelper.TokenPath))
+		if err != nil {
+			p.debug.Logf("helper token error err=%v", err)
+			return nil
+		}
+		token = strings.TrimSpace(string(data))
+	}
+	client := helper.Client{
+		Endpoint:    p.cfg.LocalHelper.Endpoint,
+		BearerToken: token,
+		Timeout:     500 * time.Millisecond,
+	}
+	passwords, err := client.LookupPasswords(ctx, helper.LookupQuery{File: filepath.Base(archivePath)})
+	if err != nil {
+		p.debug.Logf("helper lookup error err=%v", err)
+		return nil
+	}
+	out := make([]string, 0, len(passwords))
+	seen := make(map[string]struct{})
+	for _, candidate := range passwords {
+		if candidate.Value == "" {
+			continue
+		}
+		if _, ok := seen[candidate.Value]; ok {
+			continue
+		}
+		seen[candidate.Value] = struct{}{}
+		out = append(out, candidate.Value)
+	}
+	p.debug.Logf("helper summary endpoint=%s matches=%d", sanitizeDebugLine(helperEndpointForLog(p.cfg.LocalHelper.Endpoint)), len(out))
+	return out
+}
+
+func helperEndpointForLog(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return helper.DefaultEndpoint
+	}
+	return endpoint
 }
 
 func (p *passwordProvider) hashDBPasswords(ctx context.Context, archivePath string) []string {

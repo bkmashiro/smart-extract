@@ -19,6 +19,19 @@ type Config struct {
 	People             map[string]*Person `yaml:"people"`
 	FallbackPasswords  []string           `yaml:"fallback_passwords"`
 	HashDB             HashDBConfig       `yaml:"hashdb,omitempty"`
+	LocalHelper        LocalHelperConfig  `yaml:"local_helper,omitempty"`
+}
+
+// LocalHelperConfig controls the loopback-only QR/browser password candidate handoff.
+type LocalHelperConfig struct {
+	// Mode is "off" (default), "lookup" for extraction lookups, or "serve" for the helper process.
+	Mode string `yaml:"mode,omitempty"`
+	// Endpoint defaults to http://127.0.0.1:17321.
+	Endpoint string `yaml:"endpoint,omitempty"`
+	// Token is a local bearer token. Prefer TokenPath for real use.
+	Token string `yaml:"token,omitempty"`
+	// TokenPath points at a local file containing the bearer token.
+	TokenPath string `yaml:"token_path,omitempty"`
 }
 
 // HashDBConfig configures opt-in local signed HashDB bundle lookups.

@@ -25,6 +25,7 @@ func TestBuildOrdersSourcesAndDeduplicatesPasswords(t *testing.T) {
 		ArchivePath:       `/downloads/[site] RJ123456 password=inline.zip`,
 		ArchiveKey:        "[site] RJ123456 password=inline.zip",
 		ParentPassword:    "parent-pass",
+		HelperPasswords:   []string{"helper-pass", "exact-pass"},
 		FallbackPasswords: []string{"fallback-pass", "dict-pass"},
 		DictionaryLimit:   10,
 	}, source)
@@ -35,6 +36,7 @@ func TestBuildOrdersSourcesAndDeduplicatesPasswords(t *testing.T) {
 	want := []Candidate{
 		{Password: "parent-pass", Source: SourceParent},
 		{Password: "exact-pass", Source: SourceExact},
+		{Password: "helper-pass", Source: SourceHelper},
 		{Password: "inline", Source: SourceFilename},
 		{Password: "session-pass", Source: SourceSession},
 		{Password: "pattern-pass", Source: SourcePattern},
